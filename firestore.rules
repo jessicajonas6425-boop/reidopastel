@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. GLOBAL SAFETY NET
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. HELPERS
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Checking if the user matches the bootstrapped Admin address
+    function isAdmin() {
+      return isSignedIn() && (
+        (isEmailVerified() && request.auth.token.email == 'tudojonas38@gmail.com') ||
+        (request.auth.token.email == 'pastel@x.com')
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 3. PRODUCTS COLLECTION
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(productId);
+    }
+
+    // 4. SETTINGS COLLECTION
+    match /settings/{docId} {
+      allow read: if true;
+      allow write, create, update: if isAdmin();
+    }
+
+    // 5. ORDERS COLLECTION
+    match /orders/{orderId} {
+      // Any customer can read individual order details to track their order
+      allow get: if isValidId(orderId);
+      
+      // Only administrators can list all orders
+      allow list: if isAdmin();
+
+      // Submit an order is public. Basic type/integrity validation
+      allow create: if isValidId(orderId) 
+        && incoming().id == orderId
+        && incoming().customerName is string
+        && incoming().customerName.size() <= 100
+        && incoming().customerPhone is string
+        && incoming().customerPhone.size() <= 30
+        && incoming().paymentMethod is string
+        && incoming().deliveryMethod is string
+        && incoming().status == 'pending';
+
+      // Updates (like status changes) are admin-only
+      allow update, delete: if isAdmin() && isValidId(orderId);
+    }
+  }
+}

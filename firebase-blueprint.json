@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "A pastel or item for sale",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string" },
+        "available": { "type": "boolean" },
+        "imageUrl": { "type": "string" }
+      },
+      "required": ["id", "name", "price", "category", "available"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Global store settings, contacts and socials",
+      "type": "object",
+      "properties": {
+        "phone": { "type": "string" },
+        "instagram": { "type": "string" },
+        "facebook": { "type": "string" },
+        "address": { "type": "string" },
+        "deliveryFee": { "type": "number" },
+        "isOpen": { "type": "boolean" }
+      },
+      "required": ["phone", "deliveryFee", "isOpen"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A delivery or pickup order made by a customer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "items": { "type": "array" },
+        "paymentMethod": { "type": "string" },
+        "paymentChange": { "type": "string" },
+        "deliveryMethod": { "type": "string" },
+        "address": { "type": "object" },
+        "totalItems": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "totalOrder": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "customerName",
+        "customerPhone",
+        "items",
+        "paymentMethod",
+        "deliveryMethod",
+        "totalItems",
+        "deliveryFee",
+        "totalOrder",
+        "status",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of pastels and combo deals available for sale"
+    },
+    "settings/config": {
+      "schema": "AppSettings",
+      "description": "Singleton config document storing shop social links and delivery defaults"
+    },
+    "orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders submitted by customers for real-time tracking and delivery management"
+    }
+  }
+}

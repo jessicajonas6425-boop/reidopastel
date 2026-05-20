@@ -1,0 +1,6 @@
+{
+  "name": "Rei do Pastel - Delivery",
+  "description": "Site completo de delivery para Rei do Pastel com painel de administrador e suporte em tempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
