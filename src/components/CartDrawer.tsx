@@ -477,7 +477,14 @@ export default function CartDrawer({
       const whatsAppLink = `https://wa.me/${cleanPhone}?text=${encodedMsg}`;
 
       // Open in tab bypass standard browser restrictions
-      window.open(whatsAppLink, '_blank');
+      try {
+        const opened = window.open(whatsAppLink, '_blank');
+        if (!opened) {
+          console.warn("[CartDrawer] Popup window.open returned null, blocked by browser.");
+        }
+      } catch (popupErr) {
+        console.warn("[CartDrawer] Failed to open WhatsApp link via window.open (likely blocked in iframe):", popupErr);
+      }
 
       // 3. Complete and clear
       onClearCart();
@@ -485,7 +492,8 @@ export default function CartDrawer({
       alert(`Realeza, o seu pedido #${orderId} foi registrado no nosso palácio! Enviamos o resumo para o WhatsApp do Rei do Pastel para fritos imediatos.`);
     } catch (err) {
       console.error("Order processing failed:", err);
-      alert("Ouvimos um eco no palácio: Ocorreu um problema ao registrar seu pedido. Verifique sua conexão.");
+      const detailedMsg = err instanceof Error ? err.message : String(err);
+      alert(`Ouvimos um eco no palácio: Ocorreu um problema ao registrar seu pedido. Verifique sua conexão.\n\nDetalhes do erro: ${detailedMsg}`);
     } finally {
       setIsSubmitting(false);
     }

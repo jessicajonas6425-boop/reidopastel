@@ -94,6 +94,25 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+export function stripUndefined(obj: any): any {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  if (obj instanceof Date) {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(stripUndefined);
+  }
+  const cleaned: any = {};
+  for (const key of Object.keys(obj)) {
+    if (obj[key] !== undefined) {
+      cleaned[key] = stripUndefined(obj[key]);
+    }
+  }
+  return cleaned;
+}
+
 // Relational DB test connector compliant with SKILL.md rules
 export async function testConnection() {
   if (!db) return;
@@ -451,7 +470,7 @@ export const createOrder = async (order: Omit<Order, 'id'>): Promise<string> => 
         createdAt: new Date(), // Firebase timestamp representation
         updatedAt: new Date()
       };
-      await setDoc(doc(db, 'orders', uniqueId), fullOrder);
+      await setDoc(doc(db, 'orders', uniqueId), stripUndefined(fullOrder));
       return uniqueId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
@@ -611,7 +630,7 @@ export const createCustomer = async (customer: Omit<Customer, 'id' | 'createdAt'
         password,
         createdAt: new Date().toISOString()
       };
-      await setDoc(doc(db, 'customers', uniqueId), fullCustomer);
+      await setDoc(doc(db, 'customers', uniqueId), stripUndefined(fullCustomer));
       return uniqueId;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
