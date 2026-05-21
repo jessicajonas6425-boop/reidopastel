@@ -9,10 +9,18 @@ import {
   updateOrderStatus, 
   deleteOrder,
   syncOrders,
-  seedFirestoreDatabase
+  seedFirestoreDatabase,
+  forceResetDatabase,
+  wipeAllProducts,
+  syncCustomers,
+  deleteCustomer,
+  createCustomer,
+  syncCoupons,
+  saveCoupon,
+  deleteCoupon
 } from '../firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
-import { Product, AppSettings, Order } from '../types';
+import { Product, AppSettings, Order, Customer, Coupon } from '../types';
 import { 
   Settings, 
   Plus, 
@@ -34,7 +42,8 @@ import {
   MapPin, 
   ChevronDown, 
   AlertTriangle,
-  Lock
+  Lock,
+  Image
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -49,7 +58,11 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'settings'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'customers' | 'coupons' | 'settings'>('orders');
+
+  // Customer & Coupon States
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
 
   const previousOrderIdsRef = React.useRef<Set<string>>(new Set());
   const isInitialLoadRef = React.useRef(true);
@@ -135,8 +148,9 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     name: '',
     description: '',
     price: 0,
-    category: 'NACIONALIDADES',
-    available: true
+    category: 'EMPADAS',
+    available: true,
+    imageUrl: ''
   });
 
   // Settings form states
@@ -152,8 +166,8 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     maxDeliveryDistance: 15,
     minDeliveryFee: 5.00,
     freeDeliveryMinOrderValue: 80,
-    storeLatitude: -23.561506,
-    storeLongitude: -46.656139,
+    storeLatitude: -22.7529404,
+    storeLongitude: -43.4833290,
     ...settings
   });
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -186,8 +200,8 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
       maxDeliveryDistance: 15,
       minDeliveryFee: 5.00,
       freeDeliveryMinOrderValue: 80,
-      storeLatitude: -23.561506,
-      storeLongitude: -46.656139,
+      storeLatitude: -22.7529404,
+      storeLongitude: -43.4833290,
       ...settings
     });
   }, [settings]);
@@ -250,11 +264,42 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     return () => unsubscribe();
   }, [isCertifiedAdmin, currentUser]);
 
+  // Real-time synchronization for Customers and Coupons collections
+  useEffect(() => {
+    if (!isCertifiedAdmin) {
+      setCustomers([]);
+      setCoupons([]);
+      return;
+    }
+
+    const unsubCustomers = syncCustomers((freshCustomers) => {
+      setCustomers(freshCustomers);
+    });
+
+    const unsubCoupons = syncCoupons((freshCoupons) => {
+      setCoupons(freshCoupons);
+    });
+
+    return () => {
+      unsubCustomers();
+      unsubCoupons();
+    };
+  }, [isCertifiedAdmin]);
+
   // Email-Password Login states
   const [emailInput, setEmailInput] = useState('pastel@x.com');
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Coupon admin form state
+  const [coupForm, setCoupForm] = useState({
+    code: '',
+    discountValue: 10,
+    discountType: 'percentage' as 'percentage' | 'fixed',
+    active: true
+  });
+  const [isSavingCoupon, setIsSavingCoupon] = useState(false);
 
   const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -299,14 +344,17 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
 
   // CATEGORIES List
   const CATEGORIES = [
-    'NACIONALIDADES',
-    'X - PASTEL',
-    'PEITO DE PERU',
-    'PASTEL DOCE',
+    'EMPADAS',
+    'EMPADÃO',
+    'SALGADINHOS (20G)',
     'CALABRESA',
     'CAMARÃO',
     'CARNE SECA',
     'AVENTURE-SE',
+    'NACIONALIDADES',
+    'PEITO DE PERU',
+    'X-PASTEL',
+    'PASTEL DOCE',
     'PASTÉIS TRADICIONAIS',
     'DUPLOS DE QUEIJO - 2X MAIS RECHEIO',
     'TRADICIONAIS C/ QUEIJO',
@@ -320,9 +368,10 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     setProdForm({
       name: '',
       description: '',
-      price: 10.90,
-      category: 'NACIONALIDADES',
-      available: true
+      price: 5.90,
+      category: 'EMPADAS',
+      available: true,
+      imageUrl: ''
     });
     setIsProductModalOpen(true);
   };
@@ -334,7 +383,8 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
       description: product.description,
       price: product.price,
       category: product.category,
-      available: product.available
+      available: product.available,
+      imageUrl: product.imageUrl || ''
     });
     setIsProductModalOpen(true);
   };
@@ -350,7 +400,8 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
       description: prodForm.description,
       price: Number(prodForm.price),
       category: prodForm.category,
-      available: prodForm.available
+      available: prodForm.available,
+      imageUrl: prodForm.imageUrl
     };
 
     await saveProduct(productToSave);
@@ -360,6 +411,40 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
   const handleDeleteProduct = async (productId: string) => {
     if (confirm("Tem certeza que deseja excluir este pastel?")) {
       await deleteProduct(productId);
+    }
+  };
+
+  const [isResettingMenu, setIsResettingMenu] = useState(false);
+
+  const handleResetToOfficialMenu = async () => {
+    if (!confirm("⚠️ ATENÇÃO: Isso irá apagar todos os itens atuais do site e cadastrar apenas o Cardápio Oficial (Empadas, Empadões e Salgadinhos das fotos) direto no seu Firebase. Deseja continuar?")) return;
+    
+    setIsResettingMenu(true);
+    try {
+      await forceResetDatabase();
+      alert("✅ Cardápio Oficial sincronizado e atualizado no Firebase com sucesso! Todo o site foi redefinido de forma segura e está funcionando 100%.");
+    } catch (err) {
+      console.error(err);
+      alert("Ocorreu um erro ao atualizar o banco de dados: " + String(err));
+    } finally {
+      setIsResettingMenu(false);
+    }
+  };
+
+  const [isWiping, setIsWiping] = useState(false);
+
+  const handleWipeAllProducts = async () => {
+    if (!confirm("⚠️ ATENÇÃO: Isso irá APAGAR DEFINITIVAMENTE todos os itens atuais da sua vitrine e do seu banco de dados Firebase! Tem certeza de que deseja esvaziar todo o cardápio?")) return;
+
+    setIsWiping(true);
+    try {
+      await wipeAllProducts();
+      alert("✅ Todos os produtos foram apagados com sucesso! Sua vitrine agora está 100% vazia.");
+    } catch (err) {
+      console.error(err);
+      alert("Ocorreu um erro ao esvaziar o cardápio: " + String(err));
+    } finally {
+      setIsWiping(false);
     }
   };
 
@@ -545,6 +630,18 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                   className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'products' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
                 >
                   Cardápio ({products.length})
+                </button>
+                <button 
+                  onClick={() => setActiveTab('customers')} 
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'customers' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                >
+                  Clientes ({customers.length})
+                </button>
+                <button 
+                  onClick={() => setActiveTab('coupons')} 
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'coupons' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                >
+                  Cupons ({coupons.length})
                 </button>
                 <button 
                   onClick={() => setActiveTab('settings')} 
@@ -743,14 +840,30 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                   <div className="flex flex-wrap gap-4 justify-between items-center">
                     <div>
                       <h2 className="font-display text-lg text-stone-900 border-l-4 border-amber-500 pl-2">Gerenciamento de Cardápio</h2>
-                      <p className="text-xs text-stone-500">Adicione, edite ou exclua pastéis e promoções exibidos no menu principal.</p>
+                      <p className="text-xs text-stone-500">Adicione, edite ou exclua empadas, empadões e salgadinhos do menu.</p>
                     </div>
-                    <button 
-                      onClick={openAddProductModal} 
-                      className="bg-amber-400 hover:bg-amber-500 text-stone-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 border border-amber-500 shadow-sm transition-all hover:scale-[1.02]"
-                    >
-                      <Plus size={16} /> Novo Pastel / Combo
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button 
+                        onClick={handleWipeAllProducts}
+                        disabled={isWiping}
+                        className="bg-stone-100 hover:bg-stone-200 border border-stone-300 disabled:opacity-50 text-stone-700 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                      >
+                        {isWiping ? '⌛ Apagando...' : '🗑️ Zerar Vitrine'}
+                      </button>
+                      <button 
+                        onClick={handleResetToOfficialMenu}
+                        disabled={isResettingMenu}
+                        className="bg-red-50 hover:bg-red-100 disabled:opacity-50 text-[#5c0d12] border border-[#5c0d12]/30 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+                      >
+                        {isResettingMenu ? '⌛ Gravando...' : '🔄 Carregar Cardápio Oficial'}
+                      </button>
+                      <button 
+                        onClick={openAddProductModal} 
+                        className="bg-amber-400 hover:bg-amber-500 text-stone-950 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 border border-amber-500 shadow-sm transition-all hover:scale-[1.02]"
+                      >
+                        <Plus size={16} /> Novo Item
+                      </button>
+                    </div>
                   </div>
 
                   {/* Dashboard Table list of pastels */}
@@ -1056,6 +1169,50 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                       </div>
                     </div>
 
+                    {/* Flyer de Promoções Diárias (Link Externo) */}
+                    <div className="bg-[#5c0d12]/5 border border-[#5c0d12]/15 p-4 rounded-xl space-y-3">
+                      <label className="block text-xs font-black text-[#5c0d12] uppercase tracking-wider flex items-center gap-1.5">
+                        <Image className="text-brand-red" size={15} /> Flyer de Promoções Diárias (Diário de Promoções)
+                      </label>
+                      <p className="text-[10px] text-stone-700 leading-relaxed font-sans">
+                        Insira o link de uma imagem externa (JPG, PNG, GIF) que será exibido no início do site como o diário de promoções do dia. 
+                        Substituirá a área principal atual de apresentação se configurado.
+                      </p>
+                      
+                      <div className="flex gap-2">
+                        <input
+                          type="url"
+                          value={settingsForm.flyerUrl ?? ''}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, flyerUrl: e.target.value })}
+                          placeholder="Ex: https://i.postimg.cc/sua-imagem-do-flyer.png"
+                          className="flex-1 p-2.5 rounded-xl border border-stone-300 text-xs font-semibold bg-white focus:outline-none focus:ring-1 focus:ring-brand-red font-mono"
+                        />
+                        {settingsForm.flyerUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setSettingsForm({ ...settingsForm, flyerUrl: '' })}
+                            className="px-3 py-2 bg-stone-500 hover:bg-stone-600 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+                          >
+                            Limpar
+                          </button>
+                        )}
+                      </div>
+
+                      {settingsForm.flyerUrl && (
+                        <div className="mt-2 border border-stone-200 rounded-xl p-2.5 bg-white flex flex-col items-center">
+                          <span className="text-[10px] text-[#5c0d12] font-black uppercase mb-1.5 self-start">👁️ Pré-visualização do Flyer Real:</span>
+                          <img 
+                            src={settingsForm.flyerUrl} 
+                            alt="Pré-visualização do Flyer"
+                            className="max-h-48 object-contain rounded-lg border border-stone-155"
+                            onError={(e) => {
+                              (e.target as HTMLElement).style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
                     {/* Submit settings button */}
                     <div className="pt-2">
                       <button
@@ -1068,6 +1225,258 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                     </div>
 
                   </form>
+                </div>
+              )}
+
+              {/* TAB 4: CUSTOMERS */}
+              {activeTab === 'customers' && (
+                <div className="space-y-4">
+                  <div>
+                    <h2 className="font-display text-lg text-stone-900 border-l-4 border-amber-500 pl-2">Clientes do Palácio (Realeza)</h2>
+                    <p className="text-xs text-stone-500">
+                      Visualize todos os clientes cadastrados para ganhar doações, bônus e o cupom de desconto de 10%.
+                    </p>
+                  </div>
+
+                  <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-sm">
+                    {customers.length === 0 ? (
+                      <div className="p-8 text-center text-stone-400 text-xs">
+                        Nenhum cliente cadastrado ainda. Quando os clientes optarem por criar o cadastro grátis no momento do checkout, eles aparecerão aqui instantaneamente!
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-stone-700">
+                          <thead className="bg-[#5c0d12]/5 text-[#5c0d12] uppercase font-bold border-b border-stone-200">
+                            <tr>
+                              <th className="p-3 pl-4">Nome do Cliente</th>
+                              <th className="p-3">Telefone / WhatsApp</th>
+                              <th className="p-3">Login Recomendado</th>
+                              <th className="p-3">Senha de Acesso (Últimos 4 dígitos)</th>
+                              <th className="p-3">Data de Cadastro</th>
+                              <th className="p-3 pr-4 text-center">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-100 font-sans">
+                            {customers.map((cust) => {
+                              const cleanPhone = cust.phone.replace(/\D/g, '');
+                              const last4Digits = cleanPhone.slice(-4) || 'S/N';
+                              return (
+                                <tr key={cust.id} className="hover:bg-amber-50/15 transition-colors">
+                                  <td className="p-3 pl-4 font-bold text-stone-900">{cust.name}</td>
+                                  <td className="p-3 font-mono font-medium">{cust.phone}</td>
+                                  <td className="p-3 bg-stone-50 font-medium text-stone-600">{cust.name}</td>
+                                  <td className="p-3 font-mono text-emerald-700 font-bold bg-emerald-50/50">{last4Digits}</td>
+                                  <td className="p-3 text-stone-500 font-mono">
+                                    {cust.createdAt ? new Date(cust.createdAt).toLocaleString('pt-BR') : 'Sem data'}
+                                  </td>
+                                  <td className="p-3 pr-4 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm(`Deseja realmente remover o cliente ${cust.name}?`)) {
+                                          deleteCustomer(cust.id);
+                                        }
+                                      }}
+                                      className="px-2.5 py-1 text-[10px] bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded transition-colors cursor-pointer"
+                                    >
+                                      Excluir Cliente
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: COUPONS */}
+              {activeTab === 'coupons' && (
+                <div className="space-y-6">
+                  <div>
+                    <h2 className="font-display text-lg text-stone-900 border-l-4 border-amber-500 pl-2">Gerenciador de Cupons Real</h2>
+                    <p className="text-xs text-stone-500">
+                      Cadastre nomes de cupons personalizados e as taxas de desconto para aplicar na sacola dos clientes.
+                    </p>
+                  </div>
+
+                  {/* Coupon Creation Card */}
+                  <form 
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!coupForm.code.trim()) return;
+                      setIsSavingCoupon(true);
+                      try {
+                        const payload: Omit<Coupon, 'id'> = {
+                          code: coupForm.code.toUpperCase().trim(),
+                          discountValue: Number(coupForm.discountValue),
+                          discountType: coupForm.discountType,
+                          active: coupForm.active
+                        };
+                        const uppercaseCode = coupForm.code.toUpperCase().trim();
+                        await saveCoupon({ id: uppercaseCode, ...payload });
+                        setCoupForm({ code: '', discountValue: 10, discountType: 'percentage', active: true });
+                        alert(`Vossa Realeza! O cupom "${uppercaseCode}" foi gravado com sucesso no reino.`);
+                      } catch (err) {
+                        console.error("Failed to save coupon:", err);
+                        alert("Ocorreu um erro ao salvar o cupom no banco de dados.");
+                      } finally {
+                        setIsSavingCoupon(false);
+                      }
+                    }}
+                    className="bg-stone-50 border border-stone-200 rounded-2xl p-5 space-y-4 max-w-xl shadow-sm"
+                  >
+                    <span className="block text-xs font-black text-[#5c0d12] uppercase tracking-wider">
+                      ➕ Cadastrar Novo Cupom de Desconto
+                    </span>
+
+                    <div className="grid grid-cols-2 gap-4 font-sans">
+                      {/* Code */}
+                      <div>
+                        <label className="block text-xs font-bold text-stone-600 uppercase mb-1.5">Código do Cupom</label>
+                        <input
+                          type="text"
+                          required
+                          value={coupForm.code}
+                          onChange={(e) => setCoupForm({ ...coupForm, code: e.target.value })}
+                          placeholder="Ex: REI10, PASCOA"
+                          className="w-full p-2.5 rounded-xl border border-stone-300 text-sm font-extrabold uppercase bg-white focus:outline-none focus:ring-2 focus:ring-[#5c0d12]"
+                        />
+                      </div>
+
+                      {/* Type */}
+                      <div>
+                        <label className="block text-xs font-bold text-stone-600 uppercase mb-1.5">Tipo de Desconto</label>
+                        <div className="relative">
+                          <select
+                            value={coupForm.discountType}
+                            onChange={(e) => setCoupForm({ ...coupForm, discountType: e.target.value as any })}
+                            className="w-full p-2.5 pr-8 appearance-none rounded-xl border border-stone-300 text-xs font-bold text-stone-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#5c0d12]"
+                          >
+                            <option value="percentage">Porcentagem (%)</option>
+                            <option value="fixed">Valor Fixo (R$)</option>
+                          </select>
+                          <ChevronDown size={14} className="absolute right-2.5 top-3.5 text-stone-500 pointer-events-none" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 font-sans">
+                      {/* Value */}
+                      <div>
+                        <label className="block text-xs font-bold text-stone-600 uppercase mb-1.5 font-sans">Valor do Desconto</label>
+                        <input
+                          type="number"
+                          required
+                          min="0.01"
+                          step="any"
+                          value={coupForm.discountValue || ''}
+                          onChange={(e) => setCoupForm({ ...coupForm, discountValue: Number(e.target.value) })}
+                          placeholder="Ex: 10"
+                          className="w-full p-2.5 rounded-xl border border-stone-300 text-sm font-semibold font-mono bg-white focus:outline-none focus:ring-2 focus:ring-[#5c0d12]"
+                        />
+                      </div>
+
+                      {/* Active Status */}
+                      <div className="flex items-center justify-between p-2.5 bg-white rounded-xl border border-stone-200">
+                        <span className="text-xs font-bold text-stone-600 uppercase">Ativo?</span>
+                        <button
+                          type="button"
+                          onClick={() => setCoupForm({ ...coupForm, active: !coupForm.active })}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                            coupForm.active 
+                              ? 'bg-green-100 text-green-800 border-green-200' 
+                              : 'bg-red-100 text-red-800 border-red-200'
+                          }`}
+                        >
+                          {coupForm.active ? 'Ativo' : 'Desativado'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSavingCoupon}
+                      className="w-full bg-[#5c0d12] hover:bg-red-900 border border-amber-500 text-white font-bold py-2.5 rounded-xl shadow transition-all cursor-pointer text-xs uppercase tracking-wider font-sans font-black"
+                    >
+                      {isSavingCoupon ? 'Gravando Cupom...' : 'Gravar Cupom Real'}
+                    </button>
+                  </form>
+
+                  {/* Coupons List Table */}
+                  <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden shadow-sm">
+                    <span className="block text-xs font-black text-[#5c0d12] uppercase tracking-wider bg-stone-50 border-b border-stone-150 p-4">
+                      🎟️ Cupons Cadastrados no Reino ({coupons.length})
+                    </span>
+
+                    {coupons.length === 0 ? (
+                      <div className="p-8 text-center text-stone-400 text-xs">
+                        Nenhum cupom cadastrado ainda. Use o formulário acima para registrar seu primeiro cupom promocional!
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs text-stone-700">
+                          <thead className="bg-[#5c0d12]/5 text-[#5c0d12] uppercase font-bold border-b border-stone-200 font-sans">
+                            <tr>
+                              <th className="p-3 pl-4">Código do Cupom</th>
+                              <th className="p-3">Valor / Porcentagem</th>
+                              <th className="p-3">Tipo do Desconto</th>
+                              <th className="p-3">Status Atual</th>
+                              <th className="p-3 pr-4 text-center">Ações</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-100 font-sans">
+                            {coupons.map((c) => (
+                              <tr key={c.id} className="hover:bg-amber-50/15 transition-colors">
+                                <td className="p-3 pl-4 font-extrabold text-[#5c0d12] text-sm uppercase font-mono tracking-wider">{c.code}</td>
+                                <td className="p-3 font-mono font-bold text-stone-900">
+                                  {c.discountType === 'percentage' ? `${c.discountValue}%` : `R$ ${Number(c.discountValue).toFixed(2)}`}
+                                </td>
+                                <td className="p-3 font-medium text-stone-605 font-sans">
+                                  {c.discountType === 'percentage' ? 'Percentual (%)' : 'Fixo (R$)'}
+                                </td>
+                                <td className="p-3 font-medium">
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      try {
+                                        await saveCoupon({ ...c, active: !c.active });
+                                      } catch (err) {
+                                        console.error("Toggling coupon status error:", err);
+                                      }
+                                    }}
+                                    className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full transition-all border cursor-pointer ${
+                                      c.active 
+                                        ? 'bg-green-105 text-green-800 border-green-200 hover:bg-green-200' 
+                                        : 'bg-red-105 text-red-800 border-red-200 hover:bg-red-200'
+                                    }`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${c.active ? 'bg-green-600' : 'bg-red-650'}`} />
+                                    {c.active ? 'Ativo' : 'Desativado'}
+                                  </button>
+                                </td>
+                                <td className="p-3 pr-4 text-center">
+                                  <button
+                                    onClick={() => {
+                                      if (confirm(`Deseja realmente excluir o cupom ${c.code}?`)) {
+                                        deleteCoupon(c.id);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 text-[10px] bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded transition-colors cursor-pointer"
+                                  >
+                                    Excluir
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1156,6 +1565,19 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                       <ChevronDown size={14} className="absolute right-2.5 top-3.5 text-stone-500 pointer-events-none" />
                     </div>
                   </div>
+                </div>
+
+                {/* Image URL Field */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-600 uppercase mb-1">URL da Imagem Externa</label>
+                  <input
+                    type="url"
+                    value={prodForm.imageUrl}
+                    onChange={(e) => setProdForm({ ...prodForm, imageUrl: e.target.value })}
+                    placeholder="Ex: https://link-da-imagem.com/imagem.png"
+                    className="w-full p-2.5 rounded-xl border border-stone-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#5c0d12]"
+                  />
+                  <p className="text-[10px] text-stone-400 mt-1">Deixe em branco para usar o emoji animado padrão da categoria.</p>
                 </div>
 
                 {/* Available Status */}

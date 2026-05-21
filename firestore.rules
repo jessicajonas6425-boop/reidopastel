@@ -70,5 +70,20 @@ service cloud.firestore {
       // Updates (like status changes) are admin-only
       allow update, delete: if isAdmin() && isValidId(orderId);
     }
+
+    // 6. CUSTOMERS COLLECTION
+    match /customers/{customerId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isValidId(customerId)
+        && incoming().name is string
+        && incoming().phone is string;
+    }
+
+    // 7. COUPONS COLLECTION
+    match /coupons/{couponId} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(couponId);
+    }
   }
 }

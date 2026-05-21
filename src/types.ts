@@ -22,9 +22,11 @@ export interface AppSettings {
   freeDeliveryMinOrderValue?: number;
   storeLatitude?: number;
   storeLongitude?: number;
+  flyerUrl?: string;
 }
 
 export interface OrderAddress {
+  cep?: string;
   street: string;
   number: string;
   neighborhood: string;
@@ -55,8 +57,28 @@ export interface Order {
   deliveryDistanceKm?: number;
   totalItems: number;
   deliveryFee: number;
+  discountAmount?: number;
+  appliedCoupon?: string;
+  isFirstOrderBonus?: boolean;
   totalOrder: number;
   status: 'pending' | 'accepted' | 'preparing' | 'out_for_delivery' | 'delivered' | 'cancelled';
   createdAt: any; // Firestore Timestamp or ISO string
   updatedAt: any;
 }
+
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  password?: string;
+  createdAt: string; // ISO string or Firebase Timestamp
+}
+
+export interface Coupon {
+  id: string;
+  code: string; // uppercase code name e.g. REI10
+  discountValue: number; // e.g. 10 for 10% or 10.00 cash
+  discountType: 'percentage' | 'fixed';
+  active: boolean;
+}
+

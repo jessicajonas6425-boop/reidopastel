@@ -16,7 +16,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, AppSettings, Order } from './types';
+import { Product, AppSettings, Order, Customer, Coupon } from './types';
 import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './productsSeed';
 
 // Check if firebase config has placeholder values or is real
@@ -171,26 +171,38 @@ const saveLocalOrders = (orders: Order[]) => {
 export const syncProducts = (callback: (products: Product[]) => void): () => void => {
   if (isFirestoreReal && db) {
     const path = 'products';
-    return onSnapshot(collection(db, path), (snapshot) => {
-      const prods: Product[] = [];
-      snapshot.forEach((docSnap) => {
-        prods.push({ id: docSnap.id, ...docSnap.data() } as Product);
-      });
-      // If db is empty, yield INITIAL_PRODUCTS to the client without triggering write permissions errors.
-      // Seeding is handled securely and automatically once the Admin logs in.
-      if (prods.length === 0) {
+    try {
+      return onSnapshot(collection(db, path), (snapshot) => {
+        const prods: Product[] = [];
+        snapshot.forEach((docSnap) => {
+          prods.push({ id: docSnap.id, ...docSnap.data() } as Product);
+        });
+        
+        if (prods.length === 0) {
+          console.log("[Firebase] Products snapshot is empty. Loading INITIAL_PRODUCTS fallback.");
+          callback(INITIAL_PRODUCTS);
+        } else {
+          callback(prods);
+        }
+      }, (error) => {
+        console.warn("[Firebase] Failed to sync products from Firestore, using initial fallback:", error);
         callback(INITIAL_PRODUCTS);
-      } else {
-        // Sort products by id/name for consistent rendering
-        callback(prods);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    });
+      });
+    } catch (err) {
+      console.warn("[Firebase] Exception within syncProducts, using local fallback:", err);
+      const trigger = () => {
+        const localProds = getLocalProducts();
+        callback(localProds.length === 0 ? INITIAL_PRODUCTS : localProds);
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_products_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_products_updated', trigger);
+    }
   } else {
     // Local fallback
     const trigger = () => {
-      callback(getLocalProducts());
+      const localProds = getLocalProducts();
+      callback(localProds.length === 0 ? INITIAL_PRODUCTS : localProds);
     };
     trigger();
     window.addEventListener('rei_do_pastel_products_updated', trigger);
@@ -244,17 +256,28 @@ export const deleteProduct = async (productId: string): Promise<void> => {
 export const syncSettings = (callback: (settings: AppSettings) => void): () => void => {
   if (isFirestoreReal && db) {
     const path = 'settings/config';
-    return onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
-      if (docSnap.exists()) {
-        callback(docSnap.data() as AppSettings);
-      } else {
-        // If db is empty, yield INITIAL_SETTINGS to the client without triggering write permissions errors.
-        // Seeding is handled securely and automatically once the Admin logs in.
+    try {
+      return onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
+        if (docSnap.exists()) {
+          callback(docSnap.data() as AppSettings);
+        } else {
+          // If db is empty, yield INITIAL_SETTINGS to the client without triggering write permissions errors.
+          // Seeding is handled securely and automatically once the Admin logs in.
+          callback(INITIAL_SETTINGS);
+        }
+      }, (error) => {
+        console.warn("[Firebase] Failed to sync settings from Firestore, using initial fallback:", error);
         callback(INITIAL_SETTINGS);
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
-    });
+      });
+    } catch (err) {
+      console.warn("[Firebase] Exception within syncSettings, using local fallback:", err);
+      const trigger = () => {
+        callback(getLocalSettings());
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_settings_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_settings_updated', trigger);
+    }
   } else {
     // Local
     const trigger = () => {
@@ -279,6 +302,67 @@ export const saveSettings = async (settings: AppSettings): Promise<void> => {
   }
 };
 
+// Full database overwrite trigger to keep production and preview completely in sync.
+export const forceResetDatabase = async (): Promise<void> => {
+  if (isFirestoreReal && db) {
+    try {
+      console.log("[Seeder] Resetting database config settings...");
+      const settingsDocRef = doc(db, 'settings', 'config');
+      await setDoc(settingsDocRef, INITIAL_SETTINGS);
+
+      console.log("[Seeder] Cleaning existing products list...");
+      const productsCollRef = collection(db, 'products');
+      const productsSnap = await getDocs(productsCollRef);
+      
+      const deletePromises = productsSnap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+      await Promise.all(deletePromises);
+
+      console.log("[Seeder] Seeding new official products into Firestore...");
+      const createPromises = INITIAL_PRODUCTS.map((p) =>
+        setDoc(doc(db, 'products', p.id), {
+          name: p.name,
+          description: p.description,
+          price: p.price,
+          category: p.category,
+          available: p.available,
+          imageUrl: p.imageUrl || ''
+        })
+      );
+      await Promise.all(createPromises);
+      console.log("[Seeder] Force reset completed successfully on Firebase.");
+    } catch (err) {
+      console.error("[Seeder] Force reset failed:", err);
+      throw err;
+    }
+  } else {
+    // Local fallback
+    saveLocalProducts(INITIAL_PRODUCTS);
+    saveLocalSettings(INITIAL_SETTINGS);
+    console.log("[Seeder] Local storage database reset successfully.");
+  }
+};
+
+// Clear all products from database for a completely empty showcase
+export const wipeAllProducts = async (): Promise<void> => {
+  if (isFirestoreReal && db) {
+    try {
+      console.log("[Seeder] Wiping all products from Firestore...");
+      const productsCollRef = collection(db, 'products');
+      const productsSnap = await getDocs(productsCollRef);
+      
+      const deletePromises = productsSnap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+      await Promise.all(deletePromises);
+      console.log("[Seeder] All products wiped successfully from Firestore.");
+    } catch (err) {
+      console.error("[Seeder] Wipe failed:", err);
+      throw err;
+    }
+  } else {
+    saveLocalProducts([]);
+    console.log("[Seeder] Local products wiped.");
+  }
+};
+
 // Helper function to seed Firestore database securely.
 // This function will ONLY run if the current user is authenticated as the certified administrator.
 export const seedFirestoreDatabase = async (): Promise<void> => {
@@ -288,7 +372,7 @@ export const seedFirestoreDatabase = async (): Promise<void> => {
   if (!isCertifiedAdmin) return;
 
   try {
-    // 1. Seed settings config if empty
+    // 1. Seed settings config if empty or legacy
     const settingsDocRef = doc(db, 'settings', 'config');
     const settingsSnap = await getDoc(settingsDocRef);
     if (!settingsSnap.exists()) {
@@ -296,7 +380,7 @@ export const seedFirestoreDatabase = async (): Promise<void> => {
       console.log("[Seeder] Settings seeded successfully in Firestore.");
     }
 
-    // 2. Seed products list if empty
+    // 2. Only seed the products list if it is a brand new configuration install or empty
     const productsCollRef = collection(db, 'products');
     const productsSnap = await getDocs(productsCollRef);
     if (productsSnap.empty) {
@@ -422,3 +506,228 @@ export const deleteOrder = async (orderId: string): Promise<void> => {
     saveLocalOrders(ords);
   }
 };
+
+// --------------------------------------------------------------------------
+// LOCAL STORAGE ACCESSORS FOR CUSTOMERS & COUPONS
+// --------------------------------------------------------------------------
+
+const getLocalCustomers = (): Customer[] => {
+  const existing = localStorage.getItem('rei_do_pastel_customers');
+  if (existing) {
+    try {
+      return JSON.parse(existing);
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+};
+
+const saveLocalCustomers = (customers: Customer[]) => {
+  localStorage.setItem('rei_do_pastel_customers', JSON.stringify(customers));
+  window.dispatchEvent(new Event('rei_do_pastel_customers_updated'));
+};
+
+const getLocalCoupons = (): Coupon[] => {
+  const existing = localStorage.getItem('rei_do_pastel_coupons');
+  if (existing) {
+    try {
+      return JSON.parse(existing);
+    } catch (e) {
+      return [];
+    }
+  }
+  // Load default coupons
+  const defaults: Coupon[] = [
+    { id: 'cupom-primeira10', code: 'PRIMEIRA10', discountValue: 10, discountType: 'percentage', active: true },
+    { id: 'cupom-rei10', code: 'REI10', discountValue: 10, discountType: 'percentage', active: true },
+    { id: 'cupom-doce5', code: 'DOCE5', discountValue: 5, discountType: 'fixed', active: true }
+  ];
+  localStorage.setItem('rei_do_pastel_coupons', JSON.stringify(defaults));
+  return defaults;
+};
+
+const saveLocalCoupons = (coupons: Coupon[]) => {
+  localStorage.setItem('rei_do_pastel_coupons', JSON.stringify(coupons));
+  window.dispatchEvent(new Event('rei_do_pastel_coupons_updated'));
+};
+
+// --------------------------------------------------------------------------
+// 4. CUSTOMERS REPOSITORY
+// --------------------------------------------------------------------------
+
+export const syncCustomers = (callback: (customers: Customer[]) => void): () => void => {
+  if (isFirestoreReal && db) {
+    const path = 'customers';
+    try {
+      return onSnapshot(collection(db, path), (snapshot) => {
+        const custs: Customer[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          custs.push({
+            id: docSnap.id,
+            ...data,
+            createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt
+          } as Customer);
+        });
+        callback(custs);
+      }, (error) => {
+        console.warn("[Firebase] Failed to load customers, using fallback.", error);
+        callback(getLocalCustomers());
+      });
+    } catch (err) {
+      console.warn("[Firebase] Customer sync exception, using local storage:", err);
+      const trigger = () => {
+        callback(getLocalCustomers());
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_customers_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_customers_updated', trigger);
+    }
+  } else {
+    const trigger = () => {
+      callback(getLocalCustomers());
+    };
+    trigger();
+    window.addEventListener('rei_do_pastel_customers_updated', trigger);
+    return () => window.removeEventListener('rei_do_pastel_customers_updated', trigger);
+  }
+};
+
+export const createCustomer = async (customer: Omit<Customer, 'id' | 'createdAt'>): Promise<string> => {
+  const uniqueId = 'cust-' + Math.floor(1000 + Math.random() * 9000);
+  const nowStr = new Date().toISOString();
+  // Password is the last 4 digits of their phone
+  const cleanPhone = customer.phone.replace(/\D/g, '');
+  const lastFour = cleanPhone.slice(-4) || '1234';
+  const password = customer.password || lastFour;
+
+  if (isFirestoreReal && db) {
+    const path = `customers/${uniqueId}`;
+    try {
+      const fullCustomer: Customer = {
+        ...customer,
+        id: uniqueId,
+        password,
+        createdAt: new Date().toISOString()
+      };
+      await setDoc(doc(db, 'customers', uniqueId), fullCustomer);
+      return uniqueId;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, path);
+      return uniqueId;
+    }
+  } else {
+    const fullCustomer: Customer = {
+      ...customer,
+      id: uniqueId,
+      password,
+      createdAt: nowStr
+    };
+    const custs = getLocalCustomers();
+    custs.push(fullCustomer);
+    saveLocalCustomers(custs);
+    return uniqueId;
+  }
+};
+
+export const deleteCustomer = async (customerId: string): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `customers/${customerId}`;
+    try {
+      await deleteDoc(doc(db, 'customers', customerId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const custs = getLocalCustomers().filter(c => c.id !== customerId);
+    saveLocalCustomers(custs);
+  }
+};
+
+// --------------------------------------------------------------------------
+// 5. COUPONS REPOSITORY
+// --------------------------------------------------------------------------
+
+export const syncCoupons = (callback: (coupons: Coupon[]) => void): () => void => {
+  if (isFirestoreReal && db) {
+    const path = 'coupons';
+    try {
+      return onSnapshot(collection(db, path), (snapshot) => {
+        const coups: Coupon[] = [];
+        snapshot.forEach((docSnap) => {
+          coups.push({ id: docSnap.id, ...docSnap.data() } as Coupon);
+        });
+        if (coups.length === 0) {
+          // pre-seed defaults if Firestore coupons list is completely empty
+          callback(getLocalCoupons());
+        } else {
+          callback(coups);
+        }
+      }, (error) => {
+        console.warn("[Firebase] Failed to lead coupons, using fallback:", error);
+        callback(getLocalCoupons());
+      });
+    } catch (err) {
+      console.warn("[Firebase] Coupon sync exception, using local storage:", err);
+      const trigger = () => {
+        callback(getLocalCoupons());
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_coupons_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_coupons_updated', trigger);
+    }
+  } else {
+    const trigger = () => {
+      callback(getLocalCoupons());
+    };
+    trigger();
+    window.addEventListener('rei_do_pastel_coupons_updated', trigger);
+    return () => window.removeEventListener('rei_do_pastel_coupons_updated', trigger);
+  }
+};
+
+export const saveCoupon = async (coupon: Coupon): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `coupons/${coupon.id}`;
+    try {
+      await setDoc(doc(db, 'coupons', coupon.id), {
+        code: coupon.code.toUpperCase().trim(),
+        discountValue: Number(coupon.discountValue),
+        discountType: coupon.discountType,
+        active: coupon.active
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  } else {
+    const coups = getLocalCoupons();
+    const index = coups.findIndex(c => c.id === coupon.id);
+    const updated = {
+      ...coupon,
+      code: coupon.code.toUpperCase().trim(),
+      discountValue: Number(coupon.discountValue)
+    };
+    if (index >= 0) {
+      coups[index] = updated;
+    } else {
+      coups.push(updated);
+    }
+    saveLocalCoupons(coups);
+  }
+};
+
+export const deleteCoupon = async (couponId: string): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `coupons/${couponId}`;
+    try {
+      await deleteDoc(doc(db, 'coupons', couponId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const coups = getLocalCoupons().filter(c => c.id !== couponId);
+    saveLocalCoupons(coups);
+  }
+};
+

@@ -148,7 +148,14 @@ export default function App() {
           
           {/* Logo Title area with Vintage Royal frame inspired by the prompt */}
           <div className="flex items-center gap-3 select-none">
-            <span className="text-3xl sm:text-4xl filter drop-shadow-[0_2px_4px_rgba(255,193,7,0.4)]">👑</span>
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full overflow-hidden border border-brand-yellow bg-zinc-900 flex-shrink-0 flex items-center justify-center shadow-[0_2px_6px_rgba(255,193,7,0.3)]">
+              <img
+                src="https://i.postimg.cc/sXzSjhkh/702290933-3104997339685659-6402091820826444400-n.jpg"
+                alt="Logo Rei do Pastel"
+                className="w-full h-full object-cover animate-royal-fade-in"
+                referrerPolicy="no-referrer"
+              />
+            </div>
             <div>
               <div className="flex items-center gap-1.5">
                 <h1 className="font-display text-xl sm:text-2xl font-black italic tracking-widest text-brand-yellow uppercase">Rei do Pastel</h1>
@@ -189,52 +196,71 @@ export default function App() {
       </header>
 
       {/* 3. HERO VINTAGE DECK */}
-      <section className="bg-brand-dark text-white py-12 px-4 text-center relative overflow-hidden border-b border-brand-yellow/10">
+      <section className="bg-brand-dark text-white py-6 sm:py-8 px-4 text-center relative overflow-hidden border-b border-brand-yellow/10">
         
         {/* Faded Background items to mimic the logo card */}
         <div className="absolute inset-0 opacity-[0.03] pointer-events-none select-none flex items-center justify-center">
-          <span className="text-[240px] transform -rotate-12">🥟</span>
+          <span className="text-[180px] transform -rotate-12">🥟</span>
         </div>
 
-        <div className="max-w-4xl mx-auto space-y-4 relative z-10">
-          <div className="inline-flex items-center gap-1.5 bg-brand-red/10 border border-brand-red/30 px-3.5 py-1.5 rounded-full text-xs text-brand-yellow font-bold uppercase tracking-wider mb-2">
-            <Flame size={12} className="text-brand-yellow" /> Massa Frita e Recheio Transbordando!
-          </div>
-
-          <h2 className="font-display text-2xl sm:text-4xl md:text-5xl text-brand-yellow font-bold tracking-wider mb-2 uppercase italic drop-shadow-sm">OS MELHORES PASTÉIS DE VOSSA REALEZA!</h2>
-          <p className="text-stone-300 text-xs sm:text-sm max-w-xl mx-auto leading-relaxed font-sans">
-            Nossos deliciosos pastéis são feitos artesanalmente, fritos na hora com óleo novinho e acompanhados com recheio em dobro. Escolha seus favoritos abaixo e peça pelo WhatsApp de forma ultra-rápida.
-          </p>
-
-          {/* Quick stats items */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-6 max-w-2xl mx-auto text-xs font-semibold">
-            <div className="bg-neutral-900/60 p-3 rounded-xl border border-neutral-800 flex items-center justify-center gap-2 text-stone-300">
-              <span className="text-base">🥐</span> sequinhos & crocantes
-            </div>
-            <div className="bg-neutral-900/60 p-3 rounded-xl border border-neutral-800 flex items-center justify-center gap-2 text-stone-300">
-              <span className="text-base">🔥</span> fritos na hora
-            </div>
-            <div className="bg-neutral-900/60 p-3 rounded-xl border border-neutral-800 flex items-center justify-center gap-2 text-stone-300">
-              <span className="text-base">⚖️</span> 2x mais recheio
-            </div>
-            <div className="bg-neutral-900/60 p-3 rounded-xl border border-neutral-800 flex items-center justify-center gap-2 text-stone-300">
-              <span className="text-base">🚚</span> entrega rápida de moto
+        {settings.flyerUrl ? (
+          <div className="max-w-4xl mx-auto relative z-10 transition-all duration-300">
+            <span className="inline-flex items-center gap-1.5 bg-brand-red border border-brand-yellow font-black px-4 py-1.5 rounded-full text-[10px] sm:text-[11.5px] text-brand-yellow uppercase tracking-[2px] mb-4.5 animate-pulse shadow-md">
+              👑 DIÁRIO DE PROMOÇÕES DO REI 👑
+            </span>
+            <div className="mx-auto max-w-2xl rounded-2xl md:rounded-3xl border-4 border-brand-yellow/80 overflow-hidden shadow-[0_10px_35px_rgba(255,193,7,0.18)] bg-zinc-950/90 group relative">
+              <img
+                src={settings.flyerUrl}
+                alt="Diário de Promoções do Rei"
+                className="w-full h-auto object-contain max-h-[500px] mx-auto group-hover:scale-[1.015] transition-transform duration-500"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute top-3 right-3 bg-brand-dark/90 border border-brand-yellow/30 px-2.5 py-1 rounded-lg text-[9px] font-bold text-brand-yellow uppercase tracking-wider backdrop-blur-xs select-none">
+                Ofertas Imbatíveis Hoje
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="max-w-4xl mx-auto space-y-2.5 relative z-10">
+            <div className="inline-flex items-center gap-1 bg-brand-red/10 border border-brand-red/30 px-3 py-1 rounded-full text-[10px] text-brand-yellow font-bold uppercase tracking-wider mb-1">
+              <Flame size={10} className="text-brand-yellow" /> Massa Frita e Recheio Transbordando!
+            </div>
+
+            <h2 className="font-display text-xl sm:text-3xl md:text-4xl text-brand-yellow font-black tracking-wide mb-1 uppercase italic drop-shadow-xs">OS MELHORES PASTÉIS DE VOSSA REALEZA!</h2>
+            <p className="text-stone-300 text-[11px] sm:text-xs max-w-lg mx-auto leading-relaxed font-sans">
+              Nossos deliciosos pastéis são feitos artesanalmente, fritos na hora com óleo novinho e acompanhados com recheio em dobro. Escolha seus favoritos abaixo e peça de forma ultra-rápida.
+            </p>
+
+            {/* Quick stats items */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-3 max-w-xl mx-auto text-[10px] font-bold">
+              <div className="bg-neutral-900/60 p-2 rounded-lg border border-neutral-800/80 flex items-center justify-center gap-1.5 text-stone-300">
+                <span>🥐</span> sequinhos & crocantes
+              </div>
+              <div className="bg-neutral-900/60 p-2 rounded-lg border border-neutral-800/80 flex items-center justify-center gap-1.5 text-stone-300">
+                <span>🔥</span> fritos na hora
+              </div>
+              <div className="bg-neutral-900/60 p-2 rounded-lg border border-neutral-800/80 flex items-center justify-center gap-1.5 text-stone-300">
+                <span>⚖️</span> 2x mais recheio
+              </div>
+              <div className="bg-neutral-900/60 p-2 rounded-lg border border-neutral-800/80 flex items-center justify-center gap-1.5 text-stone-300">
+                <span>🚚</span> entrega ultra rápida
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 4. MAIN BODY MENU AND INTERACTIVE LAYOUT */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 md:py-12 flex flex-col md:flex-row gap-8">
+      <main className="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-4 lg:px-6 py-4 md:py-6 flex flex-col lg:flex-row gap-5">
         
         {/* Left main grid column: Menu display list */}
-        <div className="flex-1 space-y-6">
-          <div className="flex justify-between items-end pb-3 mb-2">
+        <div className="flex-1 space-y-4">
+          <div className="flex justify-between items-end pb-1.5 border-b border-stone-200/40 mb-1">
             <div>
-              <h2 className="font-sans text-3xl font-black uppercase text-brand-dark border-l-6 border-brand-red pl-4 flex items-center gap-2.5">
+              <h2 className="font-sans text-lg sm:text-xl font-black uppercase text-brand-dark border-l-4 border-brand-red pl-3 flex items-center gap-2">
                 Cardápio do Rei
               </h2>
-              <p className="text-xs text-stone-500 mt-1 pl-5">Selecione uma categoria e sinta o aroma imperial</p>
+              <p className="text-[11px] text-stone-500 mt-0.5 pl-4">Selecione uma categoria e sinta o aroma imperial</p>
             </div>
           </div>
 
@@ -243,6 +269,9 @@ export default function App() {
             onAddToCart={handleAddToCart}
             cartCount={cartCount}
             onOpenCart={() => setIsCartOpen(true)}
+            cartItems={cart}
+            onUpdateQty={handleUpdateQty}
+            onRemoveItem={handleRemoveItem}
           />
         </div>
 

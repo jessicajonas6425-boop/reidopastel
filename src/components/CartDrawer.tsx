@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Product, AppSettings, OrderItem, OrderAddress, Order } from '../types';
+import { Product, AppSettings, OrderItem, OrderAddress, Order, Coupon } from '../types';
 import { 
   X, 
   Trash2, 
@@ -18,8 +18,8 @@ import {
   Phone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { createOrder } from '../firebase';
-import { searchAddress, calculateRouteDistance, calculateDeliveryFee, GeocodingResult } from '../shippingUtils';
+import { createOrder, createCustomer, syncCoupons } from '../firebase';
+import { searchAddress, calculateRouteDistance, calculateDeliveryFee, GeocodingResult, fetchAddressByCep } from '../shippingUtils';
 
 interface CartDrawerProps {
   cartItems: OrderItem[];
@@ -47,8 +47,25 @@ export default function CartDrawer({
   const [paymentChange, setPaymentChange] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Accounts & Coupon States
+  const [concurToRegister, setConcurToRegister] = useState(false);
+  const [allCoupons, setAllCoupons] = useState<Coupon[]>([]);
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
+
+  // Sync active coupons
+  useEffect(() => {
+    const unsub = syncCoupons((coups) => {
+      setAllCoupons(coups.filter(c => c.active));
+    });
+    return unsub;
+  }, []);
+
   // Address
   const [address, setAddress] = useState<OrderAddress>({
+    cep: '',
     street: '',
     number: '',
     neighborhood: '',
@@ -57,6 +74,74 @@ export default function CartDrawer({
     latitude: undefined,
     longitude: undefined
   });
+
+  // CEP States
+  const [isSearchingCep, setIsSearchingCep] = useState(false);
+  const [cepFeedback, setCepFeedback] = useState<{ error: boolean; message: string } | null>(null);
+
+  const formatCep = (value: string) => {
+    const raw = value.replace(/\D/g, '');
+    if (raw.length <= 5) return raw;
+    return `${raw.slice(0, 5)}-${raw.slice(5, 8)}`;
+  };
+
+  const handleCepChange = (val: string) => {
+    const formatted = formatCep(val);
+    setAddress(prev => ({ 
+      ...prev, 
+      cep: formatted,
+      street: '',
+      neighborhood: '',
+      latitude: undefined,
+      longitude: undefined
+    }));
+    setCepFeedback(null);
+    setDistanceKm(null);
+  };
+
+  const triggerCepLookup = async (cepCode: string) => {
+    const clean = cepCode.replace(/\D/g, '');
+    if (clean.length !== 8) {
+      setCepFeedback({ error: true, message: 'Por favor, digite um CEP válido com 8 números.' });
+      return;
+    }
+
+    setIsSearchingCep(true);
+    setCepFeedback({ error: false, message: 'Consultando base de CEPs... Verificando limites reais em Nova Iguaçu...' });
+
+    try {
+      const res = await fetchAddressByCep(clean);
+      if (res.valid) {
+        setAddress(prev => ({
+          ...prev,
+          cep: formatCep(res.cep),
+          street: res.street,
+          neighborhood: res.neighborhood,
+          latitude: res.latitude,
+          longitude: res.longitude
+        }));
+        
+        if (res.latitude && res.longitude) {
+          setCepFeedback({ 
+            error: false, 
+            message: `CEP Localizado! Bairro: ${res.neighborhood}. Para calcular a rota por GPS, preencha o número de entrega abaixo.` 
+          });
+        } else {
+          setCepFeedback({ 
+            error: false, 
+            message: `Bairro ${res.neighborhood} identificado para o CEP. Por favor, digite a rua e número para traçarmos a distância real.` 
+          });
+        }
+      } else {
+        setCepFeedback({ error: true, message: res.message || 'Desculpe, não localizamos este CEP em Nova Iguaçu.' });
+      }
+    } catch (err) {
+      console.error("CEP lookup failed:", err);
+      setCepFeedback({ error: true, message: 'Sem conexão com a base postal. Digite o endereço manualmente para prosseguir.' });
+    } finally {
+      setIsSearchingCep(false);
+    }
+  };
 
   // shipping states
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
@@ -91,8 +176,30 @@ export default function CartDrawer({
     }
   }
 
+  // Coupon and Sign up 10% first order discount
+  const isFirstPurchaseActive = concurToRegister;
+  let discountAmount = 0;
+  let activeDiscountLabel = '';
+
+  if (isFirstPurchaseActive) {
+    discountAmount = parseFloat((subtotal * 0.10).toFixed(2));
+    activeDiscountLabel = 'Desconto de Cadastro (10%)';
+  } else if (appliedCoupon) {
+    if (appliedCoupon.discountType === 'percentage') {
+      discountAmount = parseFloat((subtotal * (appliedCoupon.discountValue / 100)).toFixed(2));
+      activeDiscountLabel = `Cupom ${appliedCoupon.code} (${appliedCoupon.discountValue}%)`;
+    } else {
+      discountAmount = parseFloat(appliedCoupon.discountValue.toFixed(2));
+      activeDiscountLabel = `Cupom ${appliedCoupon.code} (-R$ ${appliedCoupon.discountValue.toFixed(2)})`;
+    }
+  }
+
+  if (discountAmount > subtotal) {
+    discountAmount = subtotal;
+  }
+
   const deliveryFee = calculatedDeliveryFee;
-  const totalOrder = subtotal + deliveryFee;
+  const totalOrder = Math.max(0, subtotal - discountAmount + deliveryFee);
   const totalUnits = cartItems.reduce((acc, item) => acc + item.quantity, 0);
 
   // Suggested address selection handler
@@ -179,8 +286,8 @@ export default function CartDrawer({
         }
 
         // 2. Trave real-route distance using OSRM Routing between store location and client
-        const storeLat = settings.storeLatitude ?? -23.561506;
-        const storeLon = settings.storeLongitude ?? -46.656139;
+        const storeLat = settings.storeLatitude ?? -22.7529404;
+        const storeLon = settings.storeLongitude ?? -43.4833290;
 
         if (lat && lon) {
           const dist = await calculateRouteDistance(storeLat, storeLon, lat, lon);
@@ -247,6 +354,7 @@ export default function CartDrawer({
 
     if (deliveryMethod === 'delivery') {
       msg += `📍 *Endereço de Entrega:*\n`;
+      if (address.cep) msg += `• CEP: ${address.cep}\n`;
       msg += `• Rua: ${address.street}, Nº ${address.number}\n`;
       msg += `• Bairro: ${address.neighborhood}\n`;
       if (address.complement) msg += `• Compl: ${address.complement}\n`;
@@ -269,6 +377,9 @@ export default function CartDrawer({
 
     msg += `---------------------------------------\n`;
     msg += `💵 *Subtotal:* R$ ${subtotal.toFixed(2)}\n`;
+    if (discountAmount > 0) {
+      msg += `🎁 *Desconto (${activeDiscountLabel}):* -R$ ${discountAmount.toFixed(2)}\n`;
+    }
     if (deliveryMethod === 'delivery') {
       msg += `🛵 *Taxa de Entrega:* R$ ${deliveryFee.toFixed(2)}${distanceKm !== null ? ` (Ref: ${distanceKm} KM)` : ''}\n`;
     }
@@ -276,6 +387,31 @@ export default function CartDrawer({
     
     msg += `👑 _Pedido enviado via site oficial Rei do Pastel_`;
     return encodeURIComponent(msg);
+  };
+
+  const handleApplyCoupon = () => {
+    setCouponError(null);
+    setCouponSuccess(null);
+    if (!couponCode.trim()) return;
+
+    const cleanCode = couponCode.toUpperCase().trim();
+    const found = allCoupons.find(c => c.code.toUpperCase() === cleanCode && c.active);
+
+    if (!found) {
+      setCouponError('Cupom de desconto inválido ou inativo!');
+      setAppliedCoupon(null);
+      return;
+    }
+
+    setAppliedCoupon(found);
+    setCouponSuccess(`Cupom "${found.code}" aplicado! (${found.discountValue}${found.discountType === 'percentage' ? '%' : ' BRL'} de desconto)`);
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponSuccess(null);
+    setCouponError(null);
   };
 
   const handleCheckout = async (e: React.FormEvent) => {
@@ -308,6 +444,9 @@ export default function CartDrawer({
         deliveryDistanceKm: deliveryMethod === 'delivery' && distanceKm !== null ? distanceKm : undefined,
         totalItems: totalUnits,
         deliveryFee,
+        discountAmount: discountAmount > 0 ? discountAmount : undefined,
+        appliedCoupon: appliedCoupon ? appliedCoupon.code : (isFirstPurchaseActive ? 'PRIMEIRA10' : undefined),
+        isFirstOrderBonus: isFirstPurchaseActive || undefined,
         totalOrder,
         status: 'pending',
         createdAt: new Date().toISOString(),
@@ -315,6 +454,19 @@ export default function CartDrawer({
       };
 
       const orderId = await createOrder(payload);
+
+      // 1b. If they concurred to register, create their customer account automatically
+      if (concurToRegister) {
+        try {
+          await createCustomer({
+            name: customerName,
+            phone: customerPhone
+          });
+          console.log("[CartDrawer] Customer registration successfully automated for:", customerName);
+        } catch (custErr) {
+          console.warn("[CartDrawer] Silent customer registration failed/skipped:", custErr);
+        }
+      }
 
       // 2. Generate and open WhatsApp message link
       const encodedMsg = formatWhatsAppMessage(orderId);
@@ -509,6 +661,44 @@ export default function CartDrawer({
                       <MapPin size={13} /> Dados do Endereço de Entrega
                     </div>
 
+                    {/* CEP FIELD & SEARCH BUTTON */}
+                    <div>
+                      <label className="block text-[10px] font-extrabold text-stone-600 uppercase mb-1">
+                        📬 CEP do seu local de entrega *
+                      </label>
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            maxLength={9}
+                            placeholder="Ex: 26261-220"
+                            required={deliveryMethod === 'delivery'}
+                            value={address.cep || ''}
+                            onChange={(e) => handleCepChange(e.target.value)}
+                            className="w-full p-2.5 border border-stone-300 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-brand-red bg-stone-50/50"
+                          />
+                          {isSearchingCep && (
+                            <div className="absolute right-3 top-3">
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-brand-red border-t-transparent"></div>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => triggerCepLookup(address.cep || '')}
+                          disabled={isSearchingCep || !(address.cep?.replace(/\D/g, '').length === 8)}
+                          className="px-4 py-2.5 bg-[#5c0d12] hover:bg-neutral-800 text-white text-xs font-black rounded-lg transition-all disabled:opacity-45 disabled:cursor-not-allowed uppercase tracking-wider cursor-pointer"
+                        >
+                          Buscar CEP
+                        </button>
+                      </div>
+                      {cepFeedback && (
+                        <p className={`text-[10px] mt-1.5 font-bold ${cepFeedback.error ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {cepFeedback.message}
+                        </p>
+                      )}
+                    </div>
+
                     {/* SUGGESTION / AUTOCOMPLETE SEARCH BAR */}
                     <div>
                       <label className="block text-[10px] font-extrabold text-stone-600 uppercase mb-1">
@@ -689,6 +879,79 @@ export default function CartDrawer({
                 </AnimatePresence>
               </div>
 
+              {/* ÁREA DE CUPONS & CADASTRO 10% */}
+              <div className="space-y-3">
+                {/* 1. Cupom de Desconto */}
+                <div className="bg-white border border-stone-200 p-4 rounded-xl shadow-sm space-y-2">
+                  <span className="block text-xs font-extrabold text-[#5c0d12] uppercase tracking-wider flex items-center gap-1">
+                    🎟️ Possui Cupom?
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={couponCode}
+                      onChange={(e) => setCouponCode(e.target.value)}
+                      disabled={isFirstPurchaseActive}
+                      placeholder={isFirstPurchaseActive ? "Desconto de cadastro ativo" : "Ex: REI10"}
+                      className="flex-1 p-2 border border-stone-300 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-brand-red bg-white disabled:bg-stone-150 disabled:opacity-60 uppercase"
+                    />
+                    {appliedCoupon ? (
+                      <button
+                        type="button"
+                        onClick={handleRemoveCoupon}
+                        className="px-3 py-2 bg-stone-500 hover:bg-stone-600 text-white text-xs font-bold rounded-lg transition-all cursor-pointer"
+                      >
+                        Remover
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={isFirstPurchaseActive || !couponCode.trim()}
+                        className="px-4 py-2 bg-brand-dark hover:bg-stone-800 text-white text-xs font-black rounded-lg transition-all disabled:opacity-40 cursor-pointer"
+                      >
+                        Aplicar
+                      </button>
+                    )}
+                  </div>
+                  {couponError && (
+                    <p className="text-[10px] text-red-600 font-bold">{couponError}</p>
+                  )}
+                  {couponSuccess && (
+                    <p className="text-[10px] text-emerald-700 font-bold">{couponSuccess}</p>
+                  )}
+                </div>
+
+                {/* 2. Oferta de Cadastro (Aviso Pequeno de Conta e 10% de Desconto) */}
+                <div className="bg-amber-50/70 border border-amber-250 rounded-xl p-3 shadow-sm">
+                  <div className="flex items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      id="opt_in_register"
+                      checked={concurToRegister}
+                      onChange={(e) => {
+                        setConcurToRegister(e.target.checked);
+                        if (e.target.checked) {
+                          setAppliedCoupon(null);
+                          setCouponCode('');
+                          setCouponSuccess(null);
+                          setCouponError(null);
+                        }
+                      }}
+                      className="mt-0.5 h-4 w-4 rounded border-amber-400 text-brand-red focus:ring-brand-red cursor-pointer"
+                    />
+                    <label htmlFor="opt_in_register" className="text-stone-700 cursor-pointer select-none">
+                      <span className="block text-xs font-black text-[#5c0d12] uppercase tracking-wide">
+                        🎁 Desconto de Cadastro (10% OFF)!
+                      </span>
+                      <p className="text-[10px] leading-relaxed mt-0.5 font-medium">
+                        Quero criar minha conta de Realeza grátis com os dados acima para ganhar <strong>10% de desconto</strong> agora! O login será meu <strong>Nome</strong> e a senha os <strong>4 números finais do meu WhatsApp</strong>.
+                      </p>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               {/* Checkout details Card */}
               <div className="bg-white border border-stone-200 p-5 rounded-2xl shadow-sm space-y-2.5">
                 <div className="flex justify-between text-xs font-bold text-zinc-550 uppercase tracking-widest font-sans">
@@ -699,6 +962,12 @@ export default function CartDrawer({
                   <div className="flex justify-between text-xs font-bold text-zinc-555 uppercase tracking-widest font-sans">
                     <span>Taxa de Entrega</span>
                     <span className="font-sans">R$ {deliveryFee.toFixed(2)}</span>
+                  </div>
+                )}
+                {discountAmount > 0 && (
+                  <div className="flex justify-between text-xs font-bold text-emerald-700 uppercase tracking-widest font-sans bg-emerald-50 p-2 rounded-lg border border-emerald-100">
+                    <span>Desconto ({activeDiscountLabel})</span>
+                    <span className="font-sans">- R$ {discountAmount.toFixed(2)}</span>
                   </div>
                 )}
                 <div className="h-px bg-stone-100 my-2" />

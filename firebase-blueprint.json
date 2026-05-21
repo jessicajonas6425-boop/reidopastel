@@ -62,6 +62,32 @@
         "status",
         "createdAt"
       ]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A customer profile created automatically upon 10% first order option",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "password": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "phone", "createdAt"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Discount coupon configurated by administration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "discountValue": { "type": "number" },
+        "discountType": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "code", "discountValue", "discountType", "active"]
     }
   },
   "firestore": {
@@ -76,6 +102,14 @@
     "orders/{orderId}": {
       "schema": "Order",
       "description": "Orders submitted by customers for real-time tracking and delivery management"
+    },
+    "customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of customer accounts registered for rewards"
+    },
+    "coupons/{couponId}": {
+      "schema": "Coupon",
+      "description": "Collection of available discount coupons"
     }
   }
 }
