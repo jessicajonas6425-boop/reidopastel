@@ -64,6 +64,10 @@ export interface Order {
   status: 'pending' | 'accepted' | 'preparing' | 'out_for_delivery' | 'delivered' | 'cancelled';
   createdAt: any; // Firestore Timestamp or ISO string
   updatedAt: any;
+  motoboyId?: string | null;
+  motoboyName?: string | null;
+  shippedAt?: string | null; // time left the store
+  deliveredAt?: string | null; // time delivered
 }
 
 export interface Customer {
@@ -81,4 +85,23 @@ export interface Coupon {
   discountType: 'percentage' | 'fixed';
   active: boolean;
 }
+
+export interface Category {
+  id: string;
+  name: string;
+  active: boolean; // true = Ativada, false = Desativada
+}
+
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'employee' | 'motoboy';
+  status: 'active' | 'inactive';
+  cargo?: string; // specific to employee
+  phone?: string; // specific to motoboy
+  password?: string; // used for reference or fallback login
+  currentRouteOrderId?: string | null; // linked active order
+}
+
 

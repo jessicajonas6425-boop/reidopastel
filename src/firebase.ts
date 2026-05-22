@@ -16,7 +16,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Product, AppSettings, Order, Customer, Coupon } from './types';
+import { Product, AppSettings, Order, Customer, Coupon, Category, UserAccount } from './types';
 import { INITIAL_PRODUCTS, INITIAL_SETTINGS } from './productsSeed';
 
 // Check if firebase config has placeholder values or is real
@@ -417,6 +417,26 @@ export const seedFirestoreDatabase = async (): Promise<void> => {
       await Promise.all(promises);
       console.log("[Seeder] Products seeded successfully in Firestore.");
     }
+
+    // 2.5 Ensure all 18 default categories exist in Firestore categories collection
+    const categoriesCollRef = collection(db, 'categories');
+    const categoriesSnap = await getDocs(categoriesCollRef);
+    const existingNames = new Set(categoriesSnap.docs.map(doc => doc.data().name?.toUpperCase().trim()));
+    
+    const defaults = getLocalCategories();
+    const missingDefaults = defaults.filter(def => !existingNames.has(def.name.toUpperCase().trim()));
+    
+    if (missingDefaults.length > 0) {
+      console.log(`[Seeder] Found ${missingDefaults.length} categories missing in Firestore. Seeding missing categories...`);
+      const promises = missingDefaults.map((cat) =>
+        setDoc(doc(db, 'categories', cat.id), {
+          name: cat.name,
+          active: cat.active
+        })
+      );
+      await Promise.all(promises);
+      console.log("[Seeder] Categories list dynamically updated in Firestore.");
+    }
   } catch (err) {
     console.error("[Seeder] Database seeding failed:", err);
   }
@@ -749,4 +769,251 @@ export const deleteCoupon = async (couponId: string): Promise<void> => {
     saveLocalCoupons(coups);
   }
 };
+
+// --------------------------------------------------------------------------
+// 6. CATEGORIES REPOSITORY (REAL-TIME)
+// --------------------------------------------------------------------------
+
+const getLocalCategories = (): Category[] => {
+  const defaults: Category[] = [
+    { id: 'cat-combos-disponiveis', name: 'COMBOS DISPONÍVEIS', active: true },
+    { id: 'cat-empadas', name: 'EMPADAS', active: true },
+    { id: 'cat-empadao', name: 'EMPADÃO', active: true },
+    { id: 'cat-salgadinhos-20g', name: 'SALGADINHOS (20G)', active: true },
+    { id: 'cat-salgadinhos-20-g', name: 'SALGADINHOS (20 G)', active: true },
+    { id: 'cat-pasteis-tradicionais', name: 'PASTÉIS TRADICIONAIS', active: true },
+    { id: 'cat-tradicionais-queijo', name: 'TRADICIONAIS C/ QUEIJO', active: true },
+    { id: 'cat-tradicionais-cheedar', name: 'TRADICIONAIS C/ CHEEDAR', active: true },
+    { id: 'cat-duplos-queijo', name: 'DUPLOS DE QUEIJO - 2X MAIS RECHEIO', active: true },
+    { id: 'cat-calabresa', name: 'CALABRESA', active: true },
+    { id: 'cat-camarao', name: 'CAMARÃO', active: true },
+    { id: 'cat-carne-seca', name: 'CARNE SECA', active: true },
+    { id: 'cat-aventure-se', name: 'AVENTURE-SE', active: true },
+    { id: 'cat-nacionalidades', name: 'NACIONALIDADES', active: true },
+    { id: 'cat-peito-peru', name: 'PEITO DE PERU', active: true },
+    { id: 'cat-x-pastel', name: 'X-PASTEL', active: true },
+    { id: 'cat-pastel-doce', name: 'PASTEL DOCE', active: true },
+    { id: 'cat-bebidas', name: 'BEBIDAS', active: true }
+  ];
+
+  const existing = localStorage.getItem('rei_do_pastel_categories');
+  if (existing) {
+    try {
+      const existingList: Category[] = JSON.parse(existing);
+      const existingNames = new Set(existingList.map(c => c.name.toUpperCase().trim()));
+      const missing = defaults.filter(d => !existingNames.has(d.name.toUpperCase().trim()));
+      if (missing.length > 0) {
+        const merged = [...existingList, ...missing];
+        localStorage.setItem('rei_do_pastel_categories', JSON.stringify(merged));
+        return merged;
+      }
+      return existingList;
+    } catch (e) {
+      // fallback
+    }
+  }
+  localStorage.setItem('rei_do_pastel_categories', JSON.stringify(defaults));
+  return defaults;
+};
+
+const saveLocalCategories = (categories: Category[]) => {
+  localStorage.setItem('rei_do_pastel_categories', JSON.stringify(categories));
+  window.dispatchEvent(new Event('rei_do_pastel_categories_updated'));
+};
+
+export const syncCategories = (callback: (categories: Category[]) => void): () => void => {
+  if (isFirestoreReal && db) {
+    const path = 'categories';
+    try {
+      return onSnapshot(collection(db, path), (snapshot) => {
+        const cats: Category[] = [];
+        snapshot.forEach((docSnap) => {
+          cats.push({ id: docSnap.id, ...docSnap.data() } as Category);
+        });
+        if (cats.length === 0) {
+          callback(getLocalCategories());
+        } else {
+          callback(cats);
+        }
+      }, (error) => {
+        console.warn("[Firebase] Failed to load categories, using fallback:", error);
+        callback(getLocalCategories());
+      });
+    } catch (err) {
+      console.warn("[Firebase] Category sync exception, using local storage:", err);
+      const trigger = () => {
+        callback(getLocalCategories());
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_categories_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_categories_updated', trigger);
+    }
+  } else {
+    const trigger = () => {
+      callback(getLocalCategories());
+    };
+    trigger();
+    window.addEventListener('rei_do_pastel_categories_updated', trigger);
+    return () => window.removeEventListener('rei_do_pastel_categories_updated', trigger);
+  }
+};
+
+export const saveCategory = async (category: Category): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `categories/${category.id}`;
+    try {
+      await setDoc(doc(db, 'categories', category.id), {
+        name: category.name.toUpperCase().trim(),
+        active: category.active
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  } else {
+    const cats = getLocalCategories();
+    const index = cats.findIndex(c => c.id === category.id);
+    const updated = {
+      ...category,
+      name: category.name.toUpperCase().trim(),
+    };
+    if (index >= 0) {
+      cats[index] = updated;
+    } else {
+      cats.push(updated);
+    }
+    saveLocalCategories(cats);
+  }
+};
+
+export const deleteCategory = async (categoryId: string): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `categories/${categoryId}`;
+    try {
+      await deleteDoc(doc(db, 'categories', categoryId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const cats = getLocalCategories().filter(c => c.id !== categoryId);
+    saveLocalCategories(cats);
+  }
+};
+
+// --------------------------------------------------------------------------
+// 7. USER ACCOUNTS REPOSITORY (REAL-TIME STAFF/MOTOBOYS)
+// --------------------------------------------------------------------------
+
+const getLocalUsers = (): UserAccount[] => {
+  const existing = localStorage.getItem('rei_do_pastel_users');
+  if (existing) {
+    try {
+      return JSON.parse(existing);
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
+};
+
+const saveLocalUsers = (users: UserAccount[]) => {
+  localStorage.setItem('rei_do_pastel_users', JSON.stringify(users));
+  window.dispatchEvent(new Event('rei_do_pastel_users_updated'));
+};
+
+export const syncUsers = (callback: (users: UserAccount[]) => void): () => void => {
+  if (isFirestoreReal && db) {
+    const path = 'users';
+    try {
+      return onSnapshot(collection(db, path), (snapshot) => {
+        const usrs: UserAccount[] = [];
+        snapshot.forEach((docSnap) => {
+          usrs.push({ id: docSnap.id, ...docSnap.data() } as UserAccount);
+        });
+        callback(usrs);
+      }, (error) => {
+        console.warn("[Firebase] Failed to load users, using fallback:", error);
+        callback(getLocalUsers());
+      });
+    } catch (err) {
+      console.warn("[Firebase] User sync exception, using local storage:", err);
+      const trigger = () => {
+        callback(getLocalUsers());
+      };
+      trigger();
+      window.addEventListener('rei_do_pastel_users_updated', trigger);
+      return () => window.removeEventListener('rei_do_pastel_users_updated', trigger);
+    }
+  } else {
+    const trigger = () => {
+      callback(getLocalUsers());
+    };
+    trigger();
+    window.addEventListener('rei_do_pastel_users_updated', trigger);
+    return () => window.removeEventListener('rei_do_pastel_users_updated', trigger);
+  }
+};
+
+export const saveUserAccount = async (user: UserAccount): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `users/${user.id}`;
+    try {
+      await setDoc(doc(db, 'users', user.id), {
+        name: user.name,
+        email: user.email.toLowerCase().trim(),
+        role: user.role,
+        status: user.status,
+        cargo: user.cargo || '',
+        phone: user.phone || '',
+        password: user.password || '',
+        currentRouteOrderId: user.currentRouteOrderId || null
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  } else {
+    const usrs = getLocalUsers();
+    const index = usrs.findIndex(u => u.id === user.id);
+    if (index >= 0) {
+      usrs[index] = user;
+    } else {
+      usrs.push(user);
+    }
+    saveLocalUsers(usrs);
+  }
+};
+
+export const deleteUserAccount = async (userId: string): Promise<void> => {
+  if (isFirestoreReal && db) {
+    const path = `users/${userId}`;
+    try {
+      await deleteDoc(doc(db, 'users', userId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  } else {
+    const usrs = getLocalUsers().filter(u => u.id !== userId);
+    saveLocalUsers(usrs);
+  }
+};
+
+export const getUserProfile = async (userId: string): Promise<UserAccount | null> => {
+  if (isFirestoreReal && db) {
+    try {
+      const snap = await getDoc(doc(db, 'users', userId));
+      if (snap.exists()) {
+        return { id: snap.id, ...snap.data() } as UserAccount;
+      }
+    } catch (e) {
+      console.warn("[Firebase] Failed to fetch user profile", e);
+    }
+  } else {
+    const usrs = getLocalUsers();
+    return usrs.find(u => u.id === userId) || null;
+  }
+  return null;
+};
+
+export { firebaseConfig };
+
+
 

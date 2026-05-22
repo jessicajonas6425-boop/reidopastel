@@ -1,0 +1,23 @@
+{
+  "short_name": "Rei do Pastel",
+  "name": "Rei do Pastel - Delivery Real",
+  "icons": [
+    {
+      "src": "https://i.postimg.cc/sXzSjhkh/702290933-3104997339685659-6402091820826444400-n.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "https://i.postimg.cc/sXzSjhkh/702290933-3104997339685659-6402091820826444400-n.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#171515",
+  "theme_color": "#ffc107",
+  "display": "standalone",
+  "orientation": "portrait"
+}

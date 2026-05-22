@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   syncProducts, 
   syncSettings, 
+  syncCategories,
   isFirestoreReal 
 } from './firebase';
-import { Product, AppSettings, Order, OrderItem } from './types';
+import { Product, AppSettings, Order, OrderItem, Category } from './types';
 import { 
   Instagram, 
   Facebook, 
@@ -24,10 +25,12 @@ import {
 import MenuSection from './components/MenuSection';
 import CartDrawer from './components/CartDrawer';
 import AdminPanel from './components/AdminPanel';
+import InstallPrompt from './components/InstallPrompt';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [cart, setCart] = useState<OrderItem[]>([]);
@@ -48,9 +51,14 @@ export default function App() {
       setSettings(freshSettings);
     });
 
+    const unsubCategories = syncCategories((freshCategories) => {
+      setCategories(freshCategories);
+    });
+
     return () => {
       unsubProducts();
       unsubSettings();
+      unsubCategories();
     };
   }, []);
 
@@ -265,7 +273,11 @@ export default function App() {
           </div>
 
           <MenuSection 
-            products={products}
+            products={products.filter((product) => {
+              const matchedCat = categories.find(c => c.name.toUpperCase() === product.category.toUpperCase());
+              if (matchedCat && !matchedCat.active) return false;
+              return true;
+            })}
             onAddToCart={handleAddToCart}
             cartCount={cartCount}
             onOpenCart={() => setIsCartOpen(true)}
@@ -398,6 +410,9 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* 8. MOBILE ATALHO / ADD TO HOME SCREEN PROMPT */}
+      <InstallPrompt />
 
     </div>
   );

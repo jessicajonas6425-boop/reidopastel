@@ -189,7 +189,7 @@ export async function geocodeStructuredAddress(
 }
 
 /**
- * Calculates REAL route distance in kilometers between two coordinates using OSRM (Open Source Routing Machine)
+ * Calculates REAL route distance in kilometers between two coordinates strictly in straight line (linha reta) using Haversine
  */
 export async function calculateRouteDistance(
   lat1: number,
@@ -197,28 +197,8 @@ export async function calculateRouteDistance(
   lat2: number,
   lon2: number
 ): Promise<number | null> {
-  try {
-    // Coordinate sequence for OSRM is longitude,latitude
-    const url = `https://router.project-osrm.org/route/v1/driving/${lon1},${lat1};${lon2},${lat2}?overview=false`;
-    
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`OSRM routing error: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-      // distance is returned in meters
-      const distanceMeters = data.routes[0].distance;
-      const distanceKm = distanceMeters / 1000;
-      return parseFloat(distanceKm.toFixed(2));
-    }
-    return null;
-  } catch (error) {
-    console.error("OSRM Route distance calculation failed, fallback to straight line:", error);
-    // Fallback to straight-line distance if server is down
-    return calculateHaversineDistance(lat1, lon1, lat2, lon2);
-  }
+  // STRICT DIRECTION: Calculate ONLY in straight line using GPS (Haversine formula) in real time
+  return calculateHaversineDistance(lat1, lon1, lat2, lon2);
 }
 
 /**

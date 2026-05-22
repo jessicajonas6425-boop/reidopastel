@@ -16,11 +16,31 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
-    // Checking if the user matches the bootstrapped Admin address
+    // Checking if the user matches the bootstrapped Admin address or is admin in users
     function isAdmin() {
       return isSignedIn() && (
         (isEmailVerified() && request.auth.token.email == 'tudojonas38@gmail.com') ||
-        (request.auth.token.email == 'pastel@x.com')
+        (request.auth.token.email == 'pastel@x.com') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isEmployee() {
+      return isSignedIn() && (
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'employee' &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active')
+      );
+    }
+
+    function isMotoboy() {
+      return isSignedIn() && (
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'motoboy' &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active')
       );
     }
 
@@ -53,8 +73,8 @@ service cloud.firestore {
       // Any customer can read individual order details to track their order
       allow get: if isValidId(orderId);
       
-      // Only administrators can list all orders
-      allow list: if isAdmin();
+      // Only administrators or registered employees/motoboys can list all orders
+      allow list: if isAdmin() || isEmployee() || isMotoboy();
 
       // Submit an order is public. Basic type/integrity validation
       allow create: if isValidId(orderId) 
@@ -67,13 +87,14 @@ service cloud.firestore {
         && incoming().deliveryMethod is string
         && incoming().status == 'pending';
 
-      // Updates (like status changes) are admin-only
-      allow update, delete: if isAdmin() && isValidId(orderId);
+      // Updates (like status changes or assignment) can be done by admins, employees or motoboys
+      allow update: if (isAdmin() || isEmployee() || isMotoboy()) && isValidId(orderId);
+      allow delete: if isAdmin() && isValidId(orderId);
     }
 
     // 6. CUSTOMERS COLLECTION
     match /customers/{customerId} {
-      allow read, update, delete: if isAdmin();
+      allow read, update, delete: if isAdmin() || isEmployee();
       allow create: if isValidId(customerId)
         && incoming().name is string
         && incoming().phone is string;
@@ -82,8 +103,21 @@ service cloud.firestore {
     // 7. COUPONS COLLECTION
     match /coupons/{couponId} {
       allow get: if true;
-      allow list: if isAdmin();
+      allow list: if isAdmin() || isEmployee();
       allow create, update, delete: if isAdmin() && isValidId(couponId);
+    }
+
+    // 8. CATEGORIES COLLECTION
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // 9. USERS MATCH
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin() || isEmployee() || isMotoboy());
+      allow create, update: if (isAdmin() || request.auth.uid == userId) && isValidId(userId);
+      allow delete: if isAdmin() && isValidId(userId);
     }
   }
 }

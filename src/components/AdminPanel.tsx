@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
+  db,
   auth, 
   googleProvider, 
   isFirestoreReal, 
@@ -17,10 +18,20 @@ import {
   createCustomer,
   syncCoupons,
   saveCoupon,
-  deleteCoupon
+  deleteCoupon,
+  syncCategories,
+  saveCategory,
+  deleteCategory,
+  syncUsers,
+  saveUserAccount,
+  deleteUserAccount,
+  getUserProfile,
+  firebaseConfig
 } from '../firebase';
 import { signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
-import { Product, AppSettings, Order, Customer, Coupon } from '../types';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth, createUserWithEmailAndPassword, signOut as authSignOut } from 'firebase/auth';
+import { Product, AppSettings, Order, Customer, Coupon, Category, UserAccount } from '../types';
 import { 
   Settings, 
   Plus, 
@@ -43,9 +54,34 @@ import {
   ChevronDown, 
   AlertTriangle,
   Lock,
-  Image
+  Image,
+  Shield,
+  Users,
+  Search,
+  Check,
+  AlertCircle,
+  Ban,
+  ClipboardList,
+  FolderLock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import PDV_Component from './PDV';
+
+// Secure helper to pre-register employee or motoboy accounts into Firebase Auth without breaking current admin session
+const createAuthAccount = async (email: string, pass: string): Promise<string> => {
+  const tempAppName = `temp-auth-app-${Date.now()}`;
+  const tempApp = initializeApp(firebaseConfig, tempAppName);
+  const tempAuth = getAuth(tempApp);
+  try {
+    const credential = await createUserWithEmailAndPassword(tempAuth, email, pass);
+    const newUid = credential.user.uid;
+    await authSignOut(tempAuth);
+    return newUid;
+  } catch (err) {
+    console.error("Authentication account creation failed:", err);
+    throw err;
+  }
+};
 
 interface AdminPanelProps {
   products: Product[];
@@ -58,83 +94,132 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'customers' | 'coupons' | 'settings'>('orders');
+  const [activeTab, setActiveTab] = useState<string>('orders');
 
   // Customer & Coupon States
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
 
-  const previousOrderIdsRef = React.useRef<Set<string>>(new Set());
-  const isInitialLoadRef = React.useRef(true);
+  // Category and User Accounts States
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [users, setUsers] = useState<UserAccount[]>([]);
+  const [userProfile, setUserProfile] = useState<UserAccount | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
-  // Synthesize alert chime using the Web Audio API (cross-platform, reliable, no files needed)
-  const playOrderAlertSound = () => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-      const ctx = new AudioContextClass();
-      
-      const playTone = (time: number, freq: number, duration: number) => {
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const audioCtxRef = React.useRef<AudioContext | null>(null);
+  const alarmIntervalIdRef = React.useRef<any>(null);
+
+  // Auto-unlock AudioContext on user interaction anywhere on the document
+  useEffect(() => {
+    const unlock = () => {
+      if (!audioCtxRef.current) {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtxRef.current = new AudioContextClass();
+        }
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+      setAudioUnlocked(true);
+    };
+    window.addEventListener('click', unlock);
+    window.addEventListener('touchstart', unlock);
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
+
+  const playSirenChirp = (ctx: AudioContext) => {
+    const now = ctx.currentTime;
+    
+    // Pierce eardrums with sequential, fast-beeping high frequency buzzes (Sawtooth & Square waveforms are extremely buzzy/loud)
+    const playBeep = (timeSecs: number, type: 'sawtooth' | 'square', freq: number, duration: number) => {
+      try {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, time);
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, timeSecs);
         
-        gain.gain.setValueAtTime(0, time);
-        gain.gain.linearRampToValueAtTime(0.6, time + 0.05);
-        gain.gain.exponentialRampToValueAtTime(0.001, time + duration);
+        // Fast attack, full sustain at highly-noticeable volume, abrupt decay
+        gain.gain.setValueAtTime(0.001, timeSecs);
+        gain.gain.linearRampToValueAtTime(0.85, timeSecs + 0.02);
+        gain.gain.setValueAtTime(0.85, timeSecs + duration - 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, timeSecs + duration);
         
         osc.connect(gain);
         gain.connect(ctx.destination);
         
-        osc.start(time);
-        osc.stop(time + duration);
-      };
-      
-      const now = ctx.currentTime;
-      // Beautiful harmonic chime structure - Ding-Dong Double-Chime Pattern
-      playTone(now, 587.33, 0.45); // D5
-      playTone(now + 0.1, 880.00, 0.6); // A5
-
-      playTone(now + 0.4, 587.33, 0.45); // D5
-      playTone(now + 0.5, 880.00, 0.6); // A5
-    } catch (err) {
-      console.warn("Could not play order chimes:", err);
-    }
+        osc.start(timeSecs);
+        osc.stop(timeSecs + duration);
+      } catch (e) {
+        // Safe play
+      }
+    };
+    
+    // Extremely scandalous iFood style repetitive buzzer cadence (Beep beep beep screech!)
+    playBeep(now, 'sawtooth', 1200, 0.18);
+    playBeep(now + 0.22, 'square', 1400, 0.18);
+    playBeep(now + 0.44, 'sawtooth', 1200, 0.18);
+    playBeep(now + 0.66, 'square', 1600, 0.35); // Piercing lock screech
   };
 
-  // Listen for new pending orders to trigger the alert tone
+  const hasPendingOrders = orders.some(o => o.status === 'pending');
+
+  // Continual loud alarm manager
   useEffect(() => {
-    if (orders.length === 0) {
-      isInitialLoadRef.current = false;
+    if (!hasPendingOrders) {
+      if (alarmIntervalIdRef.current) {
+        clearInterval(alarmIntervalIdRef.current);
+        alarmIntervalIdRef.current = null;
+      }
       return;
     }
 
-    let hasNewPendingOrder = false;
-    
-    if (isInitialLoadRef.current) {
-      // Record initial orders to make sure we don't play sound on page load
-      orders.forEach(order => {
-        previousOrderIdsRef.current.add(order.id);
-      });
-      isInitialLoadRef.current = false;
-    } else {
-      orders.forEach(order => {
-        if (!previousOrderIdsRef.current.has(order.id)) {
-          previousOrderIdsRef.current.add(order.id);
-          // Only play sound if the new incoming order is 'pending'
-          if (order.status === 'pending') {
-            hasNewPendingOrder = true;
+    // Initialize or continue alarm loop if there are pending orders
+    if (!alarmIntervalIdRef.current) {
+      const triggerAlarmTick = () => {
+        if (!audioCtxRef.current) {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            audioCtxRef.current = new AudioContextClass();
           }
         }
-      });
+        if (audioCtxRef.current) {
+          if (audioCtxRef.current.state === 'suspended') {
+            audioCtxRef.current.resume();
+          }
+          try {
+            playSirenChirp(audioCtxRef.current);
+          } catch (e) {
+            console.warn("Loud alarm sound failed to play: user interaction probably missing.", e);
+          }
+        }
+      };
+
+      // Play first tick immediately
+      triggerAlarmTick();
+
+      // Loop every 1.4 seconds (fast urgent repetitiveness)
+      alarmIntervalIdRef.current = setInterval(triggerAlarmTick, 1400);
     }
 
-    if (hasNewPendingOrder) {
-      playOrderAlertSound();
-    }
-  }, [orders]);
+    return () => {
+      // Intentionally keep running or let the dependencies re-eval
+    };
+  }, [hasPendingOrders, audioUnlocked]);
+
+  // Clean-up loop on unmount
+  useEffect(() => {
+    return () => {
+      if (alarmIntervalIdRef.current) {
+        clearInterval(alarmIntervalIdRef.current);
+      }
+    };
+  }, []);
   
   // Local admin bypass for local testing or when Firebase isn't fully set up yet
   const [isBypassedAdmin, setIsBypassedAdmin] = useState(() => {
@@ -152,6 +237,17 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     available: true,
     imageUrl: ''
   });
+
+  const [userForm, setUserForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'employee' as 'employee' | 'motoboy',
+    status: 'active' as 'active' | 'inactive',
+    cargo: '',
+    phone: ''
+  });
+  const [isSavingUser, setIsSavingUser] = useState(false);
 
   // Settings form states
   const [settingsForm, setSettingsForm] = useState<AppSettings>({
@@ -245,9 +341,49 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
   // Check if current logged in email matches bootstrapped admin
   const isCertifiedAdmin = currentUser?.email === 'pastel@x.com' || currentUser?.email === 'tudojonas38@gmail.com' || isBypassedAdmin;
 
-  // Real-time orders synchronization for authenticated admins
+  // Resolve user profile from Firestore or localStorage fallback
   useEffect(() => {
-    if (!isCertifiedAdmin) {
+    if (!currentUser) {
+      setUserProfile(null);
+      return;
+    }
+    setProfileLoading(true);
+    getUserProfile(currentUser.uid).then((profile) => {
+      if (profile) {
+        setUserProfile(profile);
+      } else {
+        const isB = currentUser.email === 'pastel@x.com' || currentUser?.email === 'tudojonas38@gmail.com' || isBypassedAdmin;
+        if (isB) {
+          setUserProfile({
+            id: currentUser.uid,
+            name: "Rei do Pastel Administrator",
+            email: currentUser.email || 'pastel@x.com',
+            role: 'admin',
+            status: 'active'
+          });
+        }
+      }
+    }).finally(() => {
+      setProfileLoading(false);
+    });
+  }, [currentUser, isBypassedAdmin]);
+
+  const isAdminRole = userProfile?.role === 'admin' || isCertifiedAdmin;
+  const isEmployeeRole = userProfile?.role === 'employee' && userProfile?.status === 'active';
+  const isMotoboyRole = userProfile?.role === 'motoboy' && userProfile?.status === 'active';
+
+  // If a logged-in user becomes inactive, force logout automatically
+  useEffect(() => {
+    if (userProfile && userProfile.status === 'inactive') {
+      alert("⚠️ Sua conta de acesso foi desativada pelo administrador. Entre em contato com a gerência.");
+      handleLogout();
+    }
+  }, [userProfile]);
+
+  // Real-time orders synchronization for authenticated roles
+  useEffect(() => {
+    const hasAccess = isAdminRole || isEmployeeRole || isMotoboyRole;
+    if (!hasAccess) {
       setOrders([]);
       return;
     }
@@ -262,11 +398,12 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
     });
     
     return () => unsubscribe();
-  }, [isCertifiedAdmin, currentUser]);
+  }, [isAdminRole, isEmployeeRole, isMotoboyRole, currentUser]);
 
-  // Real-time synchronization for Customers and Coupons collections
+  // Real-time synchronization for Customers & Coupons
   useEffect(() => {
-    if (!isCertifiedAdmin) {
+    const hasAccess = isAdminRole || isEmployeeRole;
+    if (!hasAccess) {
       setCustomers([]);
       setCoupons([]);
       return;
@@ -284,7 +421,27 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
       unsubCustomers();
       unsubCoupons();
     };
-  }, [isCertifiedAdmin]);
+  }, [isAdminRole, isEmployeeRole]);
+
+  // Real-time synchronization for Categories (All roles read)
+  useEffect(() => {
+    const unsub = syncCategories((fresh) => {
+      setCategories(fresh);
+    });
+    return () => unsub();
+  }, []);
+
+  // Real-time synchronization for Users List (Admin only)
+  useEffect(() => {
+    if (!isAdminRole) {
+      setUsers([]);
+      return;
+    }
+    const unsub = syncUsers((fresh) => {
+      setUsers(fresh);
+    });
+    return () => unsub();
+  }, [isAdminRole]);
 
   // Email-Password Login states
   const [emailInput, setEmailInput] = useState('pastel@x.com');
@@ -530,7 +687,7 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
         </div>
 
         {/* Auth wall check */}
-        {!isCertifiedAdmin ? (
+        {!userProfile ? (
           <div className="flex-1 flex flex-col items-center justify-center py-12 px-6 text-center max-w-md mx-auto">
             <div className="bg-amber-100 p-4 rounded-full text-[#5c0d12] border border-amber-400 mb-4 animate-bounce">
               <Lock size={32} />
@@ -616,46 +773,148 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
         ) : (
           /* Logged In Content */
           <>
+            {/* ESCANDALOSO ALERTA DE PEDIDOS PENDENTES (Estilo iFood) */}
+            {hasPendingOrders && (
+              <div className="bg-[#5c0d12] text-amber-300 px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 border-b-4 border-amber-400 animate-pulse transition-all shadow-2xl relative z-50">
+                <div className="flex items-center gap-3">
+                  <div className="bg-amber-400 text-[#5c0d12] p-2.5 rounded-full animate-bounce shadow">
+                    <AlertTriangle size={24} className="text-[#5c0d12]" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-black text-sm sm:text-base tracking-wider text-white flex items-center gap-2">
+                      🚨 ALERTE: {orders.filter(o => o.status === 'pending').length} NOVO(S) PEDIDO(S) PENDENTES NO PAINEL!
+                    </h3>
+                    <p className="text-xs text-amber-100 mt-0.5">
+                      Som contínuo escandaloso ativo estilo iFood! Clique em <b>"ACEITAR PEDIDO"</b> na aba de Pedidos para parar o som de alerta.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+                  {!audioUnlocked ? (
+                    <button
+                      onClick={() => {
+                        if (audioCtxRef.current) {
+                          audioCtxRef.current.resume();
+                        }
+                        setAudioUnlocked(true);
+                      }}
+                      className="bg-amber-400 hover:bg-amber-500 text-[#5c0d12] font-black py-2.5 px-5 rounded-xl text-xs tracking-wider flex items-center gap-1.5 shadow transition-transform active:scale-95 text-center shrink-0 cursor-pointer"
+                    >
+                      🔊 ATIVAR ALERTA SONORO AGORA
+                    </button>
+                  ) : (
+                    <div className="bg-amber-500/10 border border-amber-400 text-amber-300 font-mono text-[10px] uppercase font-bold px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0 select-none">
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-ping"></span>
+                      SIRENE IFood ATIVA
+                    </div>
+                  )}
+                  {activeTab !== 'orders' && (
+                    <button
+                      onClick={() => setActiveTab('orders')}
+                      className="bg-white hover:bg-stone-100 text-[#5c0d12] font-black py-2.5 px-5 rounded-xl text-xs uppercase tracking-wider shadow transition-transform active:scale-95 shrink-0 cursor-pointer"
+                    >
+                      Ir Para Pedidos Real-time 📝
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Top Info line and Navigation */}
             <div className="bg-stone-100 border-b border-stone-200 px-6 py-3 flex flex-wrap gap-4 items-center justify-between">
-              <div className="flex gap-1 bg-stone-200 p-1 rounded-xl">
-                <button 
-                  onClick={() => setActiveTab('orders')} 
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'orders' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
-                >
-                  Pedidos Real-time ({orders.length})
-                </button>
-                <button 
-                  onClick={() => setActiveTab('products')} 
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'products' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
-                >
-                  Cardápio ({products.length})
-                </button>
-                <button 
-                  onClick={() => setActiveTab('customers')} 
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'customers' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
-                >
-                  Clientes ({customers.length})
-                </button>
-                <button 
-                  onClick={() => setActiveTab('coupons')} 
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'coupons' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
-                >
-                  Cupons ({coupons.length})
-                </button>
-                <button 
-                  onClick={() => setActiveTab('settings')} 
-                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'settings' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
-                >
-                  Configurações
-                </button>
+              <div className="flex gap-1 bg-stone-200 p-1 rounded-xl overflow-x-auto max-w-full">
+                {isAdminRole && (
+                  <>
+                    <button 
+                      onClick={() => setActiveTab('orders')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'orders' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Pedidos Real-time ({orders.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('products')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'products' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Cardápio ({products.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('categories')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'categories' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Categorias ({categories.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('users')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'users' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Usuários ({users.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('customers')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'customers' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Clientes ({customers.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('coupons')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'coupons' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Cupons ({coupons.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('settings')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'settings' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Configurações
+                    </button>
+                  </>
+                )}
+                {isEmployeeRole && (
+                  <>
+                    <button 
+                      onClick={() => setActiveTab('orders')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'orders' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Pedidos Real-time ({orders.length})
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('pdv')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'pdv' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      🧮 PDV Balcão
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('customers')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'customers' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      Clientes ({customers.length})
+                    </button>
+                  </>
+                )}
+                {isMotoboyRole && (
+                  <>
+                    <button 
+                      onClick={() => setActiveTab('motoboy_deliveries')} 
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${activeTab === 'motoboy_deliveries' ? 'bg-[#5c0d12] text-white shadow-sm' : 'text-stone-700 hover:bg-stone-300'}`}
+                    >
+                      🛵 Minhas Entregas
+                    </button>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-3 text-sm">
                 <div className="text-right">
-                  <p className="font-semibold text-stone-800 text-xs">Administrador Ativo</p>
-                  <p className="text-xs text-stone-500 font-mono">
-                    {currentUser?.email || 'DEBUG_ADMIN@local'}
+                  <p className="font-semibold text-stone-800 text-xs">
+                    {userProfile?.name || "Administrador Ativo"}
+                  </p>
+                  <p className="text-[10px] text-stone-500 font-mono flex items-center gap-1 justify-end">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    {userProfile?.role === 'admin' && '👑 Administrador'}
+                    {userProfile?.role === 'employee' && '👨‍🍳 Funcionário'}
+                    {userProfile?.role === 'motoboy' && '🛵 Motoboy Imperial'}
+                    ({currentUser?.email || 'DEBUG@local'})
                   </p>
                 </div>
                 <button 
@@ -682,7 +941,24 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                           <Circle size={8} className="fill-green-600 animate-ping" /> Sincronizado Real-Time
                         </span>
                         <button 
-                          onClick={playOrderAlertSound}
+                          onClick={() => {
+                            if (!audioCtxRef.current) {
+                              const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+                              if (AudioContextClass) {
+                                audioCtxRef.current = new AudioContextClass();
+                              }
+                            }
+                            if (audioCtxRef.current) {
+                              if (audioCtxRef.current.state === 'suspended') {
+                                audioCtxRef.current.resume();
+                              }
+                              try {
+                                playSirenChirp(audioCtxRef.current);
+                              } catch (e) {
+                                console.warn(e);
+                              }
+                            }
+                          }}
                           className="text-xs text-[#5c0d12] hover:bg-red-50 bg-white border border-[#5c0d12]/20 px-2.5 py-1 rounded-lg flex items-center gap-1 font-bold transition-colors shadow-sm cursor-pointer"
                           title="Testar sinal sonoro de novos pedidos"
                         >
@@ -1228,6 +1504,536 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                 </div>
               )}
 
+              {/* TAB: GERENCIAR CATEGORIAS */}
+              {activeTab === 'categories' && isAdminRole && (
+                <div className="space-y-6">
+                  <div className="flex flex-wrap justify-between items-center bg-stone-100 p-4 rounded-xl border border-stone-200 gap-3">
+                    <div>
+                      <h2 className="font-display text-lg text-stone-900 border-l-4 border-amber-500 pl-2">Controle de Categorias</h2>
+                      <p className="text-xs text-stone-500">Crie, edite e ative/desative as categorias do cardápio em tempo real.</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const name = prompt("Digite o nome da nova categoria:");
+                        if (name && name.trim()) {
+                          saveCategory({
+                            id: 'cat-' + Date.now(),
+                            name: name.toUpperCase().trim(),
+                            active: true
+                          });
+                        }
+                      }}
+                      className="bg-[#5c0d12] hover:bg-red-900 text-white font-bold py-2 px-4 rounded-lg text-xs flex items-center gap-1.5 transition-all shadow border border-amber-500"
+                    >
+                      <Plus size={14} /> Nova Categoria
+                    </button>
+                  </div>
+
+                  <div className="border border-stone-200 rounded-xl overflow-hidden bg-stone-50">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-stone-100 border-b border-stone-200 text-stone-700 text-xs font-bold uppercase">
+                          <th className="p-3">Nome da Categoria</th>
+                          <th className="p-3">Status</th>
+                          <th className="p-3 text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200 text-sm">
+                        {categories.map((cat) => (
+                          <tr key={cat.id} className="hover:bg-amber-500/5 transition-colors">
+                            <td className="p-3 font-semibold text-stone-800">{cat.name}</td>
+                            <td className="p-3">
+                              <button
+                                onClick={async () => {
+                                  await saveCategory({ ...cat, active: !cat.active });
+                                }}
+                                className={`px-2.5 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1 ${
+                                  cat.active 
+                                    ? 'bg-green-100 text-green-800 border border-green-200' 
+                                    : 'bg-red-100 text-red-800 border border-red-200'
+                                }`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${cat.active ? 'bg-green-650' : 'bg-red-600'}`}></span>
+                                {cat.active ? 'Ativada' : 'Desativada'}
+                              </button>
+                            </td>
+                            <td className="p-3 text-right space-x-2">
+                              <button
+                                onClick={() => {
+                                  const name = prompt("Altere o nome da categoria:", cat.name);
+                                  if (name && name.trim() && name !== cat.name) {
+                                    saveCategory({ ...cat, name: name.toUpperCase().trim() });
+                                  }
+                                }}
+                                className="text-xs text-blue-600 hover:underline inline-flex items-center gap-1"
+                              >
+                                <Edit2 size={12} /> Editar
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Tem certeza que deseja excluir permanentemente a categoria "${cat.name}"? Os produtos vinculados continuarão guardados no banco de dados.`)) {
+                                    await deleteCategory(cat.id);
+                                  }
+                                }}
+                                className="text-xs text-red-600 hover:underline inline-flex items-center gap-1"
+                              >
+                                <Trash2 size={12} /> Excluir
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {categories.length === 0 && (
+                          <tr>
+                            <td colSpan={3} className="p-6 text-center text-stone-400 text-xs">Nenhuma categoria cadastrada ainda. Utilize o botão acima para começar!</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: GERENCIAR USUÁRIOS & PERMISSÕES */}
+              {activeTab === 'users' && isAdminRole && (
+                <div className="space-y-6">
+                  {/* Register Section */}
+                  <div className="bg-[#5c0d12]/5 border border-[#5c0d12]/20 p-5 rounded-2xl">
+                    <h3 className="font-display text-base text-stone-900 border-l-4 border-[#5c0d12] pl-2 mb-3">Cadastrar Novo Usuário (Funcionários & Motoboys)</h3>
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!userForm.name.trim() || !userForm.email.trim() || !userForm.password.trim()) {
+                          alert("Preencha todos os campos obrigatórios (nome, email e senha).");
+                          return;
+                        }
+                        setIsSavingUser(true);
+                        try {
+                          let finalUid = 'usr-' + Date.now();
+                          if (isFirestoreReal) {
+                            // Register in authentication safely via temporary app helper
+                            finalUid = await createAuthAccount(userForm.email, userForm.password);
+                          }
+                          await saveUserAccount({
+                            id: finalUid,
+                            name: userForm.name.trim(),
+                            email: userForm.email.toLowerCase().trim(),
+                            role: userForm.role,
+                            status: userForm.status,
+                            cargo: userForm.role === 'employee' ? userForm.cargo : '',
+                            phone: userForm.role === 'motoboy' ? userForm.phone : '',
+                            password: userForm.password // Stored securely for reference or fallback validation
+                          });
+                          alert(`✅ Usuário ${userForm.name} cadastrado com sucesso!`);
+                          setUserForm({
+                            name: '',
+                            email: '',
+                            password: '',
+                            role: 'employee',
+                            status: 'active',
+                            cargo: '',
+                            phone: ''
+                          });
+                        } catch (err: any) {
+                          alert("Erro ao cadastrar usuário: " + (err.message || String(err)));
+                        } finally {
+                          setIsSavingUser(false);
+                        }
+                      }}
+                      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+                    >
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-stone-600 mb-1">Nome Completo</label>
+                        <input
+                          type="text"
+                          required
+                          value={userForm.name}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                          placeholder="Ex: João da Silva"
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-stone-600 mb-1">E-mail de Trabalho</label>
+                        <input
+                          type="email"
+                          required
+                          value={userForm.email}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                          placeholder="joao@pastel.com"
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-stone-600 mb-1">Senha de Acesso</label>
+                        <input
+                          type="text"
+                          required
+                          value={userForm.password}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
+                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                          placeholder="Min. 6 caracteres"
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-stone-600 mb-1">Nível de Acesso / Função</label>
+                        <select
+                          value={userForm.role}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, role: e.target.value as any }))}
+                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                        >
+                          <option value="employee">👨‍🍳 Funcionário de Cozinha/Balcão</option>
+                          <option value="motoboy">🛵 Motoboy de Entrega</option>
+                        </select>
+                      </div>
+
+                      {userForm.role === 'employee' ? (
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-xs font-bold text-stone-600 mb-1">Cargo Real (Ex: Atendente, Pizzaiolo, Caixa)</label>
+                          <input
+                            type="text"
+                            value={userForm.cargo}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, cargo: e.target.value }))}
+                            className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                            placeholder="Atendente de Balcão e Operador de PDV"
+                          />
+                        </div>
+                      ) : (
+                        <div className="col-span-1 sm:col-span-2">
+                          <label className="block text-xs font-bold text-stone-600 mb-1">Telefone WhatsApp do Motoboy</label>
+                          <input
+                            type="text"
+                            value={userForm.phone}
+                            onChange={(e) => setUserForm(prev => ({ ...prev, phone: e.target.value }))}
+                            className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs"
+                            placeholder="21999999999"
+                          />
+                        </div>
+                      )}
+
+                      <div className="col-span-1">
+                        <label className="block text-xs font-bold text-stone-600 mb-1">Status da Conta</label>
+                        <select
+                          value={userForm.status}
+                          onChange={(e) => setUserForm(prev => ({ ...prev, status: e.target.value as any }))}
+                          className="w-full px-3 py-2 rounded-lg border border-stone-300 text-stone-800 text-xs font-bold"
+                        >
+                          <option value="active">🟢 Ativado (Consegue Logar)</option>
+                          <option value="inactive">🔴 Desativado (Acesso Bloqueado)</option>
+                        </select>
+                      </div>
+
+                      <div className="col-span-1 flex items-end">
+                        <button
+                          type="submit"
+                          disabled={isSavingUser}
+                          className="w-full bg-[#5c0d12] hover:bg-red-900 border border-amber-500 text-white font-bold py-2 px-4 rounded-xl text-xs shadow transition-colors active:scale-95 disabled:opacity-50"
+                        >
+                          {isSavingUser ? 'Cadastrando...' : '➕ Cadastrar Conta'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+
+                  {/* Users Grid */}
+                  <div className="space-y-4">
+                    <h3 className="font-display text-base text-stone-900 border-l-4 border-amber-500 pl-2">Funcionários e Motoboys Ativos ({users.length})</h3>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {users.map((usr) => (
+                        <div key={usr.id} className="border border-stone-200 rounded-2xl bg-stone-50 p-4 relative shadow-sm hover:shadow-md transition-all">
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="font-bold text-stone-800 text-sm">{usr.name}</p>
+                              <p className="text-[10px] text-stone-500 font-mono">{usr.email}</p>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                              usr.role === 'employee' ? 'bg-orange-100 text-orange-850' : 'bg-blue-100 text-blue-800'
+                            }`}>
+                              {usr.role === 'employee' ? '👨‍🍳 Funcionário' : '🛵 Motoboy'}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1 mt-3 pt-3 border-t border-stone-200 text-xs text-stone-600">
+                            {usr.role === 'employee' && <p><b>Cargo:</b> {usr.cargo || 'Geral'}</p>}
+                            {usr.role === 'motoboy' && <p><b>WhatsApp:</b> {usr.phone || 'N/A'}</p>}
+                            <p className="flex items-center gap-1.5 font-sans text-xs">
+                              <b>Status no Palácio:</b>
+                              <span className={`flex items-center gap-1 font-bold ${usr.status === 'active' ? 'text-green-600' : 'text-red-600'}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${usr.status === 'active' ? 'bg-green-600' : 'bg-red-600'}`}></span>
+                                {usr.status === 'active' ? 'Ativo' : 'Desativado'}
+                              </span>
+                            </p>
+                          </div>
+
+                          <div className="mt-4 pt-3 border-t border-stone-200 flex gap-2 justify-end">
+                            <button
+                              onClick={async () => {
+                                const newStatus = usr.status === 'active' ? 'inactive' : 'active';
+                                await saveUserAccount({ ...usr, status: newStatus });
+                              }}
+                              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${
+                                usr.status === 'active' 
+                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300' 
+                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                              }`}
+                            >
+                              {usr.status === 'active' ? '🚫 Desativar' : '🟢 Ativar'}
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (confirm(`Deseja realmente remover permanentemente a conta de "${usr.name}"? Eles perderão o acesso imediatamente.`)) {
+                                  await deleteUserAccount(usr.id);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-lg text-[10px] font-bold border bg-red-50 hover:bg-red-100 text-red-700 border-red-300 transition-colors"
+                            >
+                              🗑️ Excluir
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {users.length === 0 && (
+                        <div className="col-span-full text-center py-6 text-stone-400 text-xs">Sem funcionários ou motoboys cadastrados.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB: PDV BALCÃO */}
+              {activeTab === 'pdv' && (isEmployeeRole || isAdminRole) && (
+                <PDV_Component 
+                  products={products}
+                  categories={categories}
+                  onSaleCompleted={() => {
+                    setActiveTab('orders');
+                  }}
+                />
+              )}
+
+              {/* TAB: MOTOBOY DELIVERIES & QUEUE */}
+              {activeTab === 'motoboy_deliveries' && isMotoboyRole && (
+                <div className="space-y-6">
+                  <div className="bg-stone-904 text-amber-100 bg-stone-900 p-5 rounded-2xl shadow border border-amber-400">
+                    <h2 className="font-display text-lg text-amber-300 flex items-center gap-2"><Truck /> Painel Real-Time do Motoboy</h2>
+                    <p className="text-xs text-stone-300 mt-1">Olá, <b>{userProfile?.name}</b>! Gerencie suas corridas de entrega com facilidade abaixo.</p>
+                  </div>
+
+                  {/* Active Deliveries */}
+                  <div className="space-y-4">
+                    <h3 className="font-display text-sm text-[#5c0d12] border-l-4 border-amber-500 pl-2 uppercase font-black tracking-wider">Minhas Entregas Ativas</h3>
+                    <div className="grid gap-4">
+                      {orders
+                        .filter(o => o.deliveryMethod === 'delivery' && o.motoboyId === currentUser?.uid && o.status !== 'delivered' && o.status !== 'cancelled')
+                        .map((order) => {
+                          return (
+                            <div key={order.id} className="border-2 border-amber-400 bg-amber-500/5 rounded-2xl p-5 shadow-sm space-y-4 text-left">
+                              <div className="flex flex-wrap justify-between items-center gap-3 border-b border-stone-200 pb-3">
+                                <span className="font-mono bg-[#5c0d12] text-white px-3 py-1 rounded-full text-xs font-black">PEDIDO #{order.id}</span>
+                                <span className={`px-2.5 py-1 rounded text-xs font-bold ${
+                                  order.status === 'out_for_delivery' ? 'bg-purple-100 text-purple-800 animate-pulse' : 'bg-blue-100 text-blue-800'
+                                }`}>
+                                  {order.status === 'out_for_delivery' ? '🛵 EM ROTA DE ENTREGA' : '🎰 PREPARANDO NA COZINHA'}
+                                </span>
+                              </div>
+
+                              <div className="grid sm:grid-cols-2 gap-4 text-xs text-stone-700">
+                                <div className="space-y-1">
+                                  <p className="font-bold text-stone-900 text-base">Cliente: {order.customerName}</p>
+                                  <p><b>WhatsApp:</b> {order.customerPhone}</p>
+                                  <p><b>Forma de Pagamento:</b> {order.paymentMethod}</p>
+                                  {order.paymentChange && <p className="text-red-650 font-bold bg-red-50 p-2 rounded"><b>Troco:</b> {order.paymentChange}</p>}
+                                  <p className="text-sm font-bold text-stone-900">Valor Total: R$ {Number(order.totalOrder).toFixed(2)}</p>
+                                </div>
+                                <div className="space-y-1 bg-stone-100 p-3 rounded-lg border">
+                                  <p className="font-bold text-stone-800">📍 Endereço de Destino:</p>
+                                  <p>{order.address?.street}, nº {order.address?.number}</p>
+                                  <p>Bairro: {order.address?.neighborhood}</p>
+                                  {order.address?.complement && <p>Complemento: {order.address.complement}</p>}
+                                  {order.address?.reference && <p className="text-amber-700 font-sans">Referência: {order.address.reference}</p>}
+                                  {order.deliveryDistanceKm && (
+                                    <p className="font-mono font-black text-[#5c0d12] mt-1.5 text-[11px] uppercase">
+                                      Distância em Linha Reta: {order.deliveryDistanceKm} KM
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2">
+                                {order.status !== 'out_for_delivery' ? (
+                                  <button
+                                    onClick={async () => {
+                                      const nowStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                                      await updateOrderStatus(order.id, 'out_for_delivery');
+                                      if (isFirestoreReal && db) {
+                                        const { doc, updateDoc } = await import('firebase/firestore');
+                                        const orderRef = doc(db, 'orders', order.id);
+                                        await updateDoc(orderRef, { shippedAt: nowStr });
+                                      } else {
+                                        const localOrders = localStorage.getItem('rei_do_pastel_orders');
+                                        if (localOrders) {
+                                          const list: Order[] = JSON.parse(localOrders);
+                                          const idx = list.findIndex(o => o.id === order.id);
+                                          if (idx >= 0) {
+                                            list[idx].shippedAt = nowStr;
+                                            list[idx].status = 'out_for_delivery';
+                                            localStorage.setItem('rei_do_pastel_orders', JSON.stringify(list));
+                                            window.dispatchEvent(new Event('rei_do_pastel_orders_updated'));
+                                          }
+                                        }
+                                      }
+                                      alert("🏍️ Rota Iniciada! Boa viagem e pilote com segurança.");
+                                    }}
+                                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-extrabold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow cursor-pointer transition-transform active:scale-[0.99]"
+                                  >
+                                    🏍️ INICIAR ROTA (Mudar status para: A Caminho)
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={async () => {
+                                      const nowStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                                      await updateOrderStatus(order.id, 'delivered');
+                                      if (isFirestoreReal && db) {
+                                        const { doc, updateDoc } = await import('firebase/firestore');
+                                        const orderRef = doc(db, 'orders', order.id);
+                                        await updateDoc(orderRef, { deliveredAt: nowStr });
+                                      } else {
+                                        const localOrders = localStorage.getItem('rei_do_pastel_orders');
+                                        if (localOrders) {
+                                          const list: Order[] = JSON.parse(localOrders);
+                                          const idx = list.findIndex(o => o.id === order.id);
+                                          if (idx >= 0) {
+                                            list[idx].deliveredAt = nowStr;
+                                            list[idx].status = 'delivered';
+                                            localStorage.setItem('rei_do_pastel_orders', JSON.stringify(list));
+                                            window.dispatchEvent(new Event('rei_do_pastel_orders_updated'));
+                                          }
+                                        }
+                                      }
+                                      alert("🏆 Parabéns! Mais uma entrega concluída para a realeza.");
+                                    }}
+                                    className="flex-1 bg-green-650 hover:bg-green-700 bg-green-600 text-white font-extrabold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow cursor-pointer transition-transform active:scale-[0.99]"
+                                  >
+                                    🏁 FINALIZAR ROTA (Marcar como Entregue)
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                      {orders.filter(o => o.deliveryMethod === 'delivery' && o.motoboyId === currentUser?.uid && o.status !== 'delivered' && o.status !== 'cancelled').length === 0 && (
+                        <p className="text-stone-400 text-xs py-4 text-center border border-dashed border-stone-200 bg-stone-50 rounded-xl">Você não possui nenhuma corrida ativa no momento. Aceite uma corrida abaixo!</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Available Deliveries Queue */}
+                  <div className="space-y-4">
+                    <h3 className="font-display text-sm text-[#5c0d12] border-l-4 border-amber-500 pl-2 uppercase font-black tracking-wider">Pedidos Disponíveis para Entrega</h3>
+                    <div className="grid gap-4">
+                      {orders
+                        .filter(o => o.deliveryMethod === 'delivery' && (!o.motoboyId) && o.status !== 'delivered' && o.status !== 'cancelled')
+                        .map((order) => {
+                          return (
+                            <div key={order.id} className="border border-stone-200 bg-stone-50 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-left">
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono bg-[#5c0d12]/10 text-[#5c0d12] px-2 py-0.5 rounded text-xs font-bold">#{order.id}</span>
+                                  <span className="text-stone-850 font-bold">{order.customerName}</span>
+                                </div>
+                                <div className="text-xs text-stone-600 space-y-1 font-sans">
+                                  <p>📍 <b>Destino:</b> {order.address?.street}, {order.address?.number} ({order.address?.neighborhood})</p>
+                                  {order.deliveryDistanceKm !== undefined && (
+                                    <p className="text-teal-700 font-bold bg-teal-50 border border-teal-200 px-2 py-0.5 rounded inline-block text-[11px] uppercase mt-1">
+                                      📏 Distância GPS: {order.deliveryDistanceKm} KM
+                                    </p>
+                                  )}
+                                  <p className="text-stone-900 font-bold gap-1.5 flex flex-wrap items-center mt-1">
+                                    💰 Total: R$ {Number(order.totalOrder).toFixed(2)} | Comissão Frete: R$ {Number(order.deliveryFee).toFixed(2)}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <button
+                                onClick={async () => {
+                                  const name = userProfile?.name || "Motoboy Imperial";
+                                  const payload = {
+                                    motoboyId: currentUser.uid,
+                                    motoboyName: name,
+                                    status: order.status === 'pending' ? 'accepted' : order.status
+                                  };
+
+                                  if (isFirestoreReal && db) {
+                                    const { doc, updateDoc } = await import('firebase/firestore');
+                                    const orderRef = doc(db, 'orders', order.id);
+                                    await updateDoc(orderRef, payload);
+                                  } else {
+                                    const localOrders = localStorage.getItem('rei_do_pastel_orders');
+                                    if (localOrders) {
+                                      const list: Order[] = JSON.parse(localOrders);
+                                      const idx = list.findIndex(o => o.id === order.id);
+                                      if (idx >= 0) {
+                                        list[idx] = { ...list[idx], ...payload };
+                                        localStorage.setItem('rei_do_pastel_orders', JSON.stringify(list));
+                                        window.dispatchEvent(new Event('rei_do_pastel_orders_updated'));
+                                      }
+                                    }
+                                  }
+                                  alert("✅ Sucesso! Corrida vinculada ao seu perfil. Prepare-se e inicie a rota assim que coletar.");
+                                }}
+                                className="bg-[#5c0d12] hover:bg-red-900 text-white font-extrabold py-2 px-4 rounded-xl text-xs transition-colors self-start md:self-center uppercase border border-amber-500 shadow active:scale-95 cursor-pointer"
+                              >
+                                🤝 Aceitar Entrega
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                      {orders.filter(o => o.deliveryMethod === 'delivery' && (!o.motoboyId) && o.status !== 'delivered' && o.status !== 'cancelled').length === 0 && (
+                        <p className="text-stone-400 text-xs py-4 text-center">Fila vazia! Não há nenhum pedido precisando de entrega no momento.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Delivery History */}
+                  <div className="space-y-4 pt-4 border-t border-stone-200 text-left">
+                    <h3 className="font-display text-sm text-stone-500 uppercase font-black tracking-wider">Histórico de Corridas Entregues</h3>
+                    <div className="border border-stone-200 rounded-xl overflow-hidden text-xs bg-stone-50">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-stone-100 border-b border-stone-200 text-stone-700 font-bold">
+                            <th className="p-3">Pedido</th>
+                            <th className="p-3">Destino</th>
+                            <th className="p-3">Horários (Saída / Chegada)</th>
+                            <th className="p-3 text-right">Frete</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-200 font-mono text-stone-600">
+                          {orders
+                            .filter(o => o.deliveryMethod === 'delivery' && o.motoboyId === currentUser?.uid && o.status === 'delivered')
+                            .map((order) => (
+                              <tr key={order.id} className="hover:bg-stone-100 transition-colors">
+                                <td className="p-3 font-semibold text-stone-850">#{order.id}</td>
+                                <td className="p-3">{order.address?.street}, nº {order.address?.number}</td>
+                                <td className="p-3 text-stone-500 font-sans">
+                                  {order.shippedAt || '--:--'} às {order.deliveredAt || '--:--'}
+                                </td>
+                                <td className="p-3 text-right font-bold text-green-700">R$ {Number(order.deliveryFee).toFixed(2)}</td>
+                              </tr>
+                            ))}
+                          {orders.filter(o => o.deliveryMethod === 'delivery' && o.motoboyId === currentUser?.uid && o.status === 'delivered').length === 0 && (
+                            <tr>
+                              <td colSpan={4} className="p-4 text-center text-stone-400 font-sans">Sua lista de históricos de corridas está vazia.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
               {/* TAB 4: CUSTOMERS */}
               {activeTab === 'customers' && (
                 <div className="space-y-4">
@@ -1558,7 +2364,7 @@ export default function AdminPanel({ products, settings, orders: propOrders, onC
                         onChange={(e) => setProdForm({ ...prodForm, category: e.target.value })}
                         className="w-full p-2.5 pr-8 appearance-none rounded-xl border border-stone-300 text-xs font-bold text-stone-750 bg-white focus:outline-none focus:ring-2 focus:ring-[#5c0d12]"
                       >
-                        {CATEGORIES.map((cat) => (
+                        {(categories.length > 0 ? categories.map(c => c.name.toUpperCase()) : ['EMPADAS', 'EMPADÕES', 'DOCES', 'BEBIDAS']).map((cat) => (
                           <option key={cat} value={cat}>{cat}</option>
                         ))}
                       </select>

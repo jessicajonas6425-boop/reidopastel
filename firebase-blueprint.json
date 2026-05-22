@@ -88,6 +88,33 @@
         "active": { "type": "boolean" }
       },
       "required": ["id", "code", "discountValue", "discountType", "active"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Food category configured by admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "name", "active"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Admin, Employee, or Motoboy profile registered in the database",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" },
+        "cargo": { "type": "string" },
+        "phone": { "type": "string" },
+        "password": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role", "status"]
     }
   },
   "firestore": {
@@ -110,6 +137,14 @@
     "coupons/{couponId}": {
       "schema": "Coupon",
       "description": "Collection of available discount coupons"
+    },
+    "categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Available product categories controllable by admin in real-time"
+    },
+    "users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Collection of custom admin, employees and motoboys managing operations"
     }
   }
 }
